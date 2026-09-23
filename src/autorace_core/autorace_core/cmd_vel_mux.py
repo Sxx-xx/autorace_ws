@@ -27,6 +27,7 @@ forward on its own.
 """
 
 from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool
@@ -53,11 +54,17 @@ class CmdVelMux(Node):
         self.declare_parameter('stall_timeout', 20.0)
         self.declare_parameter('creep_timeout', 25.0)
         self.declare_parameter('creep_speed', 0.05)
+        self.declare_parameter('blocked_timeout', 3.0)
+        self.declare_parameter('unstick_duration', 1.5)
+        self.declare_parameter('unstick_speed', -0.07)
 
         self.input_timeout = self.get_parameter('input_timeout').value
         self.stall_timeout = self.get_parameter('stall_timeout').value
         self.creep_timeout = self.get_parameter('creep_timeout').value
         self.creep_speed = self.get_parameter('creep_speed').value
+        self.blocked_timeout = self.get_parameter('blocked_timeout').value
+        self.unstick_duration = self.get_parameter('unstick_duration').value
+        self.unstick_speed = self.get_parameter('unstick_speed').value
         publish_rate = self.get_parameter('publish_rate').value
 
         self.commands = {name: None for name, _ in INPUTS}
@@ -75,6 +82,7 @@ class CmdVelMux(Node):
         # light before the start is not a stall.
         self.run_active = False
         self.create_subscription(Bool, '/autorace/run_active', self.callback_run_active, 1)
+        self.create_subscription(Odometry, '/odom', self.callback_odom, 1)
 
         self.pub_cmd_vel = self.create_publisher(Twist, '/cmd_vel', 1)
         self.pub_active_input = self.create_publisher(Bool, '/autorace/mux_stalled', 1)
@@ -83,11 +91,19 @@ class CmdVelMux(Node):
         self.stall_override = False
         self.last_selected = None
 
+        # Told to move but not moving: something is in the way.
+        self.measured_speed = 0.0
+        self.pushing_since = None
+        self.unstick_until = None
+
         self.create_timer(1.0 / publish_rate, self.arbitrate)
 
     def callback_input(self, msg, key):
         self.commands[key] = msg
         self.stamps[key] = self.get_clock().now().nanoseconds / 1e9
+
+    def callback_odom(self, msg):
+        self.measured_speed = abs(msg.twist.twist.linear.x)
 
     def callback_run_active(self, msg):
         if msg.data and not self.run_active:
@@ -114,6 +130,8 @@ class CmdVelMux(Node):
         if command is None:
             command = Twist()
             name = 'none'
+
+        command, name = self.unstick(command, name, now)
 
         moving = abs(command.linear.x) > 1e-3 or abs(command.angular.z) > 1e-3
         if moving or not self.run_active:
@@ -143,6 +161,34 @@ class CmdVelMux(Node):
 
         self.pub_cmd_vel.publish(command)
         self.pub_active_input.publish(Bool(data=self.stall_override))
+
+    def unstick(self, command, name, now):
+        """Back off when the robot is driving into something.
+
+        Touching an obstacle costs nothing in this competition but pushing
+        against it burns the clock, and the wheels turning is enough to hide
+        the problem from the stall watchdog, which only sees the command.
+        """
+        if self.unstick_until is not None:
+            if now < self.unstick_until:
+                backing = Twist()
+                backing.linear.x = self.unstick_speed
+                return backing, 'unstick'
+            self.unstick_until = None
+            self.pushing_since = None
+            return command, name
+
+        wants_to_move = command.linear.x > 0.01
+        if wants_to_move and self.measured_speed < 0.01:
+            if self.pushing_since is None:
+                self.pushing_since = now
+            elif now - self.pushing_since > self.blocked_timeout:
+                self.get_logger().error('Robot is blocked, backing off.')
+                self.unstick_until = now + self.unstick_duration
+        else:
+            self.pushing_since = None
+
+        return command, name
 
     def shut_down(self):
         self.pub_cmd_vel.publish(Twist())
