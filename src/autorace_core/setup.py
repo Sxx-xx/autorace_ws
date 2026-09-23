@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'cmd_vel_mux = autorace_core.cmd_vel_mux:main',
+            'lane_controller = autorace_core.lane_controller:main',
             'mission_manager = autorace_core.mission_manager:main',
         ],
     },

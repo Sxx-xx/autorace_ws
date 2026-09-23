@@ -1,0 +1,70 @@
+---
+# Perception tuning for the simulated AutoRace course.
+#
+# The bird's eye view is defined in metres: the projector is told where the
+# camera sits and how far ahead to look, and everything downstream works from
+# `pixels_per_meter`.  At 1200 px/m the 1000x600 output covers +/-0.417 m
+# across and 0.24..0.74 m ahead, which keeps at least one line inside the
+# frame through the tightest bends on the course.
+bev_projector:
+  ros__parameters:
+    camera:
+      height: 0.20          # measured above the road surface in simulation
+      pitch: 0.30           # rad, nose down
+      forward_offset: 0.073
+    bev:
+      pixels_per_meter: 1200.0
+      width: 1000
+      height: 600
+      near: 0.24            # the camera sees no closer than 0.226 m
+    blur_kernel: 5
+
+detect_lane:
+  ros__parameters:
+    bev:
+      pixels_per_meter: 1200.0
+      near: 0.24
+    lane:
+      width_m: 0.25         # measured between the line centres on the course
+      control_lookahead: 0.45
+    detect:
+      min_pixels: 2000
+      max_line_width_m: 0.08
+      auto_threshold: true
+      lane:
+        white:
+          hue_l: 0
+          hue_h: 179
+          saturation_l: 0
+          saturation_h: 70
+          lightness_l: 105
+          lightness_h: 255
+        yellow:
+          hue_l: 10
+          hue_h: 127
+          saturation_l: 70
+          saturation_h: 255
+          lightness_l: 95
+          lightness_h: 255
+    reliability:
+      # A line may be missing from up to this fraction of the rows and still
+      # count; the original demanded all but 100 of 600 rows, which no line
+      # manages in a bend.
+      max_missing_fraction: 0.55
+      step: 5
+      threshold: 50
+    process_every_n: 2
+    hold_last_center_sec: 0.4
+
+lane_controller:
+  ros__parameters:
+    max_speed: 0.16
+    min_speed: 0.05
+    kp: 2.6
+    kd: 6.0
+    max_angular: 2.0
+    slowdown_offset: 0.12
+    lane_timeout: 0.5
+    recovery_speed: 0.05
+    recovery_angular: 0.45
+    recovery_timeout: 8.0
