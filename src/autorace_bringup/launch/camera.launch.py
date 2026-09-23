@@ -14,15 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Camera pipeline: bird's eye projection and brightness compensation.
+"""Brightness compensated camera image for the sign and light detectors.
 
-In simulation the camera is distortion free, so the raw image goes straight
-into the pipeline without rectification.
+The lane pipeline works on the bird's eye view and is launched separately; this
+is the forward view that the sign, traffic light and level crossing detectors
+read.
 """
 
-import os
-
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -30,43 +28,13 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    pkg_bringup = get_package_share_directory('autorace_bringup')
-
-    calibration_mode = LaunchConfiguration('calibration_mode')
     use_sim_time = LaunchConfiguration('use_sim_time')
-    source_topic = LaunchConfiguration('source_topic')
+    camera_topic = LaunchConfiguration('camera_topic')
 
     declare_args = [
-        DeclareLaunchArgument('calibration_mode', default_value='False',
-                              description='Publish the projection guide overlay and accept '
-                                          'live parameter changes.'),
         DeclareLaunchArgument('use_sim_time', default_value='true'),
-        DeclareLaunchArgument('source_topic', default_value='/camera/image_raw',
-                              description='Rectified colour image to feed the pipeline.'),
+        DeclareLaunchArgument('camera_topic', default_value='/camera/image_raw'),
     ]
-
-    projection_param = os.path.join(pkg_bringup, 'param', 'projection_sim.yaml')
-
-    image_projection = Node(
-        package='turtlebot3_autorace_camera',
-        executable='image_projection',
-        namespace='camera',
-        name='image_projection',
-        output='screen',
-        parameters=[
-            projection_param,
-            {'is_extrinsic_camera_calibration_mode': calibration_mode,
-             'use_sim_time': use_sim_time},
-        ],
-        remappings=[
-            ('/camera/image_input', source_topic),
-            ('/camera/image_input/compressed', [source_topic, '/compressed']),
-            ('/camera/image_output', '/camera/image_projected'),
-            ('/camera/image_output/compressed', '/camera/image_projected/compressed'),
-            ('/camera/image_calib', '/camera/image_extrinsic_calib'),
-            ('/camera/image_calib/compressed', '/camera/image_extrinsic_calib/compressed'),
-        ],
-    )
 
     image_compensation = Node(
         package='turtlebot3_autorace_camera',
@@ -74,13 +42,16 @@ def generate_launch_description():
         namespace='camera',
         name='image_compensation',
         output='screen',
-        parameters=[projection_param, {'use_sim_time': use_sim_time}],
+        parameters=[
+            {'camera.extrinsic_camera_calibration.clip_hist_percent': 1.0,
+             'use_sim_time': use_sim_time},
+        ],
         remappings=[
-            ('/camera/image_input', source_topic),
-            ('/camera/image_input/compressed', [source_topic, '/compressed']),
+            ('/camera/image_input', camera_topic),
+            ('/camera/image_input/compressed', [camera_topic, '/compressed']),
             ('/camera/image_output', '/camera/image_compensated'),
             ('/camera/image_output/compressed', '/camera/image_compensated/compressed'),
         ],
     )
 
-    return LaunchDescription(declare_args + [image_projection, image_compensation])
+    return LaunchDescription(declare_args + [image_compensation])
