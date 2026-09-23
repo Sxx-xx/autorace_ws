@@ -1,0 +1,7 @@
+build/
+install/
+log/
+
+# Upstream sources, fetched with: vcs import src < autorace.repos
+src/turtlebot3_autorace/
+src/turtlebot3_simulations/
