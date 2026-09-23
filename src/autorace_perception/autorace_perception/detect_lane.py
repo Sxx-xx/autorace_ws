@@ -80,6 +80,7 @@ class DetectLane(Node):
 
         self.declare_parameter('detect.min_pixels', 3000)
         self.declare_parameter('detect.max_line_width_m', 0.08)
+        self.declare_parameter('detect.side_margin_m', 0.05)
         self.declare_parameter('detect.auto_threshold', True)
         self.declare_parameter('detect.auto_threshold_low', 5000)
         self.declare_parameter('detect.auto_threshold_high', 35000)
@@ -99,6 +100,7 @@ class DetectLane(Node):
         blob_px = int(self.get_parameter('detect.max_line_width_m').value * self.ppm)
         self.blob_kernel_h = np.ones((1, max(3, blob_px)), np.uint8)
         self.blob_kernel_v = np.ones((max(3, blob_px), 1), np.uint8)
+        self.side_margin_px = self.get_parameter('detect.side_margin_m').value * self.ppm
         self.auto_threshold = self.get_parameter('detect.auto_threshold').value
         self.auto_low = self.get_parameter('detect.auto_threshold_low').value
         self.auto_high = self.get_parameter('detect.auto_threshold_high').value
@@ -270,18 +272,30 @@ class DetectLane(Node):
 
         self.publish_lane(image, plot_y, yellow_pixels, white_pixels, msg.header)
 
-    def usable(self, side):
-        """A line counts when it is reliable enough and has been fitted."""
+    def usable(self, side, width):
+        """A line counts when it is reliable, fitted, and on its own side.
+
+        The side check is what keeps the robot on the track: the white line
+        lives to the right of the robot and the yellow to its left, so a white
+        line that has wandered to the left of centre means the robot is outside
+        the lane, and steering half a lane further left would take it off the
+        course.
+        """
+        center = width / 2.0
         if side == 'left':
-            return self.reliability_yellow > self.reliability_threshold \
-                and self.left_fitx is not None
-        return self.reliability_white > self.reliability_threshold \
-            and self.right_fitx is not None
+            return (self.reliability_yellow > self.reliability_threshold
+                    and self.left_fitx is not None
+                    and self.left_fitx[self.control_row(len(self.left_fitx))]
+                    < center + self.side_margin_px)
+        return (self.reliability_white > self.reliability_threshold
+                and self.right_fitx is not None
+                and self.right_fitx[self.control_row(len(self.right_fitx))]
+                > center - self.side_margin_px)
 
     def publish_lane(self, image, plot_y, yellow_pixels, white_pixels, header):
         height, width = image.shape[:2]
-        fresh_yellow = yellow_pixels > self.min_pixels and self.usable('left')
-        fresh_white = white_pixels > self.min_pixels and self.usable('right')
+        fresh_yellow = yellow_pixels > self.min_pixels and self.usable('left', width)
+        fresh_white = white_pixels > self.min_pixels and self.usable('right', width)
 
         center_x = None
         state = LANE_NONE
@@ -295,11 +309,11 @@ class DetectLane(Node):
         elif fresh_white:
             center_x = self.right_fitx - self.lane_width_px / 2.0
             state = LANE_RIGHT_ONLY
-        elif self.usable('left'):
+        elif self.usable('left', width):
             # Reliable but not seen in this frame: keep steering on the last curve.
             center_x = self.left_fitx + self.lane_width_px / 2.0
             state = LANE_LEFT_ONLY
-        elif self.usable('right'):
+        elif self.usable('right', width):
             center_x = self.right_fitx - self.lane_width_px / 2.0
             state = LANE_RIGHT_ONLY
 
