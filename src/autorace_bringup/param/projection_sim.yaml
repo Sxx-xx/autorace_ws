@@ -1,0 +1,28 @@
+---
+# Bird's eye view calibration for the simulated AutoRace camera.
+#
+# Camera (autorace_sim/models/autorace_waffle_pi): 320x240, fx = fy = 265.23,
+# measured 0.20 m above the road and pitched 0.30 rad down.
+#
+# detect_lane assumes a fixed bird's eye scale: the lane centre is at x=500 and
+# half a lane is 280 px, i.e. 0.125 m -> 280 px = 2240 px/m.  The 600 px wide
+# destination band (x=200..800) must therefore cover +/-0.134 m of road, and
+# the source quad is the image of that strip between 0.24 m and 0.45 m in front
+# of the robot (0.226 m is the nearest ground the camera sees at all).
+# Changing the camera pose means recomputing these four numbers.
+camera:
+  image_projection:
+    ros__parameters:
+      camera:
+        extrinsic_camera_calibration:
+          top_x: 73
+          top_y: 29
+          bottom_x: 123
+          bottom_y: 110
+---
+camera:
+  image_compensation_projection:
+    ros__parameters:
+      camera:
+        extrinsic_camera_calibration:
+          clip_hist_percent: 1.0

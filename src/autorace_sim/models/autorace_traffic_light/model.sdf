@@ -1,0 +1,49 @@
+<?xml version="1.0" ?>
+<sdf version="1.10">
+  <model name="autorace_traffic_light">
+    <static>true</static>
+    <link name="housing">
+      <collision name="collision">
+        <geometry>
+          <box><size>0.09 0.03 0.26</size></box>
+        </geometry>
+      </collision>
+      <visual name="visual">
+        <geometry>
+          <box><size>0.09 0.03 0.26</size></box>
+        </geometry>
+        <material>
+          <ambient>0.05 0.05 0.05 1</ambient>
+          <diffuse>0.08 0.08 0.08 1</diffuse>
+          <specular>0.02 0.02 0.02 1</specular>
+        </material>
+      </visual>
+
+      <!-- Dark sockets. The lit lamp models sit just in front of these. -->
+      <visual name="socket_red">
+        <pose>0 -0.016 0.075 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.026</radius><length>0.002</length></cylinder></geometry>
+        <material>
+          <ambient>0.12 0.02 0.02 1</ambient>
+          <diffuse>0.15 0.02 0.02 1</diffuse>
+        </material>
+      </visual>
+      <visual name="socket_yellow">
+        <pose>0 -0.016 0.0 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.026</radius><length>0.002</length></cylinder></geometry>
+        <material>
+          <ambient>0.13 0.11 0.02 1</ambient>
+          <diffuse>0.16 0.14 0.02 1</diffuse>
+        </material>
+      </visual>
+      <visual name="socket_green">
+        <pose>0 -0.016 -0.075 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.026</radius><length>0.002</length></cylinder></geometry>
+        <material>
+          <ambient>0.02 0.12 0.06 1</ambient>
+          <diffuse>0.02 0.15 0.07 1</diffuse>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>
