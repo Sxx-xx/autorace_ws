@@ -43,9 +43,21 @@
 | `detect/detect_lane.py` | 흰색/노란색 차선 검출 + 슬라이딩 윈도우 | `/detect/lane`(Float64), `/detect/lane_state`(UInt8) |
 | `detect/detect_level_crossing.py` | 차단바(빨간 막대) 검출 | `/detect/level_crossing_order` |
 | `detect/detect_*_sign.py` | SIFT 기반 표지판 매칭 5종 | `/detect/traffic_sign`(UInt8) |
-| `mission/control_lane.py` | 차선 PD 추종 | `/control/cmd_vel` |
+| `mission/control_lane.py` | 차선 PD 추종 (→ `autorace_core/lane_controller.py`로 대체) | `/control/cmd_vel` |
 | `mission/avoid_construction.py` | LiDAR 기반 공사구간 회피 | `/avoid_control`, `/avoid_active` |
 | `mission/mission_tunnel.py` | Nav2 goal 전송형 터널 주행 | `/goal_pose` |
+
+### 포크한 것 🔧 (`autorace_perception`)
+
+| 원본 | 우리 것 | 이유 |
+|---|---|---|
+| `camera/image_projection.py` | `bev_projector.py` | 원본은 의미 없는 픽셀 좌표 4개로 캘리브레이션하고 파라미터 범위 제한(`top_x≤120` 등)까지 걸려 있어 시야를 넓힐 수 없다. 포크는 **카메라 높이·피치 + `camera_info`** 로 호모그래피를 직접 계산하고 출력 스케일을 `pixels_per_meter`로 명시한다. 실기체 이식 시 높이·피치만 재측정하면 된다. |
+| `detect/detect_lane.py` | `detect_lane.py` | 원본은 BEV 스케일을 하드코딩(차선 반폭 **280px**, 제어점 **350행**)해 시야 확대가 불가능했다. 포크는 `lane.width_m`와 `pixels_per_meter`로 반폭을 계산하고, 제어점은 **전방 주시거리(m)** 로 지정한다. 신뢰도 판정 기준(원본: 600행 중 500행 이상 커버)도 파라미터화. |
+
+포크에서 함께 고친 것:
+- 한 프레임에서 양쪽 차선을 모두 놓치면 원본은 중심값을 **아예 발행하지 않아** 제어가 끊긴다 → 짧은 유지(`hold_last_center_sec`) 추가
+- 초기 프레임에서 아직 피팅되지 않은 곡선을 참조해 예외가 나는 경로가 있었다 → 상태 검사 추가
+- 차선 중심 오프셋을 **미터 단위**(`/detect/lane_offset`)로도 발행 → 제어 게인이 캘리브레이션과 무관해짐
 
 ### 없어서 직접 만들어야 하는 것 ❌
 1. **미션 총괄 상태머신** — 2020 버전의 `core_node_mode/mission`이 jazzy 브랜치에서 통째로 빠짐. 지금 상태로는 미션들이 서로 연결되지 않음.
