@@ -1,0 +1,27 @@
+<?xml version="1.0" ?>
+<sdf version="1.10">
+  <model name="autorace_lamp_green">
+    <!-- Not static: set_pose has to be able to teleport it. No collision and
+         no gravity so it never disturbs the robot. -->
+    <static>false</static>
+    <link name="lamp">
+      <gravity>false</gravity>
+      <kinematic>true</kinematic>
+      <inertial>
+        <mass>0.001</mass>
+        <inertia><ixx>1e-6</ixx><iyy>1e-6</iyy><izz>1e-6</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+      </inertial>
+      <visual name="visual">
+        <pose>0 0 0 1.5708 0 0</pose>
+        <geometry><cylinder><radius>0.024</radius><length>0.004</length></cylinder></geometry>
+        <material>
+          <ambient>0.05 1.0 0.2 1</ambient>
+          <diffuse>0.05 1.0 0.2 1</diffuse>
+          <specular>0.2 0.2 0.2 1</specular>
+          <emissive>0.05 1.0 0.2 1</emissive>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>
