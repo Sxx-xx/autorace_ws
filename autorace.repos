@@ -1,0 +1,12 @@
+repositories:
+  turtlebot3_autorace:
+    type: git
+    url: https://github.com/ROBOTIS-GIT/turtlebot3_autorace.git
+    version: jazzy
+  # Only used as a source of the original course assets; it is excluded from
+  # the build with a COLCON_IGNORE file because turtlebot3_gazebo also comes
+  # from apt.
+  turtlebot3_simulations:
+    type: git
+    url: https://github.com/ROBOTIS-GIT/turtlebot3_simulations.git
+    version: jazzy
