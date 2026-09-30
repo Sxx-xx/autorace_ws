@@ -43,24 +43,25 @@ class SimLevelCrossing(Node):
 
         # Odometry starts at the spawn pose, so the offset turns it into world
         # coordinates without needing ground truth from the simulator.
-        self.declare_parameter('start_x', 0.8)
-        self.declare_parameter('start_y', -1.747)
+        # The positions come from params/course.yaml, which is generated
+        # together with the world file.
+        self.declare_parameter('start_x', 0.0)
+        self.declare_parameter('start_y', 0.0)
+        self.declare_parameter('start_yaw', 0.0)
 
-        # Bar hinge, matching the world file.
-        self.declare_parameter('bar_x', -0.8)
-        self.declare_parameter('bar_y', 1.26)
         # Sensor 1: the trigger point on the approach.
-        self.declare_parameter('sensor1_x', -0.35)
-        self.declare_parameter('sensor1_y', 1.26)
+        self.declare_parameter('sensor1_x', 0.0)
+        self.declare_parameter('sensor1_y', 0.0)
         self.declare_parameter('sensor1_radius', 0.20)
         # Sensor 2: 6 cm in front of the bar, per the rules.
-        self.declare_parameter('sensor2_offset', 0.06)
+        self.declare_parameter('sensor2_x', 0.0)
+        self.declare_parameter('sensor2_y', 0.0)
         self.declare_parameter('sensor2_radius', 0.08)
         self.declare_parameter('closed_duration', 10.0)
 
         self.start_x = self.get_parameter('start_x').value
         self.start_y = self.get_parameter('start_y').value
-        self.bar = (self.get_parameter('bar_x').value, self.get_parameter('bar_y').value)
+        self.start_yaw = self.get_parameter('start_yaw').value
         self.sensor1 = (
             self.get_parameter('sensor1_x').value,
             self.get_parameter('sensor1_y').value,
@@ -68,10 +69,10 @@ class SimLevelCrossing(Node):
         self.sensor1_radius = self.get_parameter('sensor1_radius').value
         self.sensor2_radius = self.get_parameter('sensor2_radius').value
         self.closed_duration = self.get_parameter('closed_duration').value
-
-        offset = self.get_parameter('sensor2_offset').value
-        # The approach runs along +x towards the bar.
-        self.sensor2 = (self.bar[0] - offset, self.bar[1])
+        self.sensor2 = (
+            self.get_parameter('sensor2_x').value,
+            self.get_parameter('sensor2_y').value,
+        )
 
         self.pub_bar = self.create_publisher(Float64, '/level_bar/cmd', 1)
         self.pub_state = self.create_publisher(String, '/sim/level_crossing', 1)
@@ -91,9 +92,13 @@ class SimLevelCrossing(Node):
         return self.get_clock().now().nanoseconds / 1e9
 
     def callback_odom(self, msg):
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+        cos_yaw = math.cos(self.start_yaw)
+        sin_yaw = math.sin(self.start_yaw)
         self.position = (
-            self.start_x + msg.pose.pose.position.x,
-            self.start_y + msg.pose.pose.position.y,
+            self.start_x + cos_yaw * x - sin_yaw * y,
+            self.start_y + sin_yaw * x + cos_yaw * y,
         )
 
     def near(self, point, radius):

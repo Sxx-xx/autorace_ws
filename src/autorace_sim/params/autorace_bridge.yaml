@@ -50,6 +50,12 @@
   gz_type_name: "gz.msgs.CameraInfo"
   direction: GZ_TO_ROS
 
+- ros_topic_name: "camera_lane/camera_info"
+  gz_topic_name: "camera_lane/camera_info"
+  ros_type_name: "sensor_msgs/msg/CameraInfo"
+  gz_type_name: "gz.msgs.CameraInfo"
+  direction: GZ_TO_ROS
+
 # Level crossing bar angle command: 0 rad blocks the road, pi/2 opens it.
 - ros_topic_name: "/level_bar/cmd"
   gz_topic_name: "/level_bar/cmd"

@@ -29,28 +29,29 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
+import yaml
 
-# The start pose of the 2020 course: on the start line, facing the lights.
-START_X = '0.8'
-START_Y = '-1.747'
-START_YAW = '0.0'
-
-ROBOT_MODEL = 'waffle_pi'
-# Our own copy of the waffle_pi: same chassis, AutoRace camera mast.
-ROBOT_SDF_MODEL = 'autorace_waffle_pi'
+ROBOT_MODEL = 'burger'
+# TurtleBot3 Burger with the AutoRace camera.
+ROBOT_SDF_MODEL = 'autorace_burger'
 
 
 def generate_launch_description():
     # turtlebot3_gazebo reads this at launch-description build time.
-    os.environ.setdefault('TURTLEBOT3_MODEL', ROBOT_MODEL)
+    os.environ['TURTLEBOT3_MODEL'] = ROBOT_MODEL
 
     pkg_sim = get_package_share_directory('autorace_sim')
     pkg_tb3_gazebo = get_package_share_directory('turtlebot3_gazebo')
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
 
+    # Generated together with the world by scripts/gen_course_world.py.
+    course_params = os.path.join(pkg_sim, 'params', 'course_sim_nodes.yaml')
+    with open(os.path.join(pkg_sim, 'params', 'course.yaml')) as f:
+        start = yaml.safe_load(f)['course']['start']
+
     use_sim_time = LaunchConfiguration('use_sim_time')
     gui = LaunchConfiguration('gui')
-    world = PathJoinSubstitution([pkg_sim, 'worlds', 'autorace_2023.sdf'])
+    world = PathJoinSubstitution([pkg_sim, 'worlds', 'autorace_course.sdf'])
 
     robot_sdf = os.path.join(pkg_sim, 'models', ROBOT_SDF_MODEL, 'model.sdf')
     bridge_config = os.path.join(pkg_sim, 'params', 'autorace_bridge.yaml')
@@ -59,9 +60,10 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('gui', default_value='true',
                               description='Run the Gazebo GUI as well as the server.'),
-        DeclareLaunchArgument('x_pose', default_value=START_X),
-        DeclareLaunchArgument('y_pose', default_value=START_Y),
-        DeclareLaunchArgument('yaw', default_value=START_YAW),
+        # On the start line, facing the lights.
+        DeclareLaunchArgument('x_pose', default_value=str(start['x'])),
+        DeclareLaunchArgument('y_pose', default_value=str(start['y'])),
+        DeclareLaunchArgument('yaw', default_value=str(start['yaw'])),
     ]
 
     set_model_env = SetEnvironmentVariable('TURTLEBOT3_MODEL', ROBOT_MODEL)
@@ -131,7 +133,8 @@ def generate_launch_description():
         package='ros_gz_image',
         executable='image_bridge',
         name='autorace_image_bridge',
-        arguments=['/camera/image_raw'],
+        # Forward camera (signs, traffic light) and lane camera.
+        arguments=['/camera/image_raw', '/camera_lane/image_raw'],
         parameters=[{'use_sim_time': use_sim_time}],
         output='screen',
     )
@@ -140,7 +143,7 @@ def generate_launch_description():
         package='autorace_sim',
         executable='sim_traffic_light',
         name='sim_traffic_light',
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[course_params, {'use_sim_time': use_sim_time}],
         output='screen',
     )
 
@@ -148,11 +151,7 @@ def generate_launch_description():
         package='autorace_sim',
         executable='sim_level_crossing',
         name='sim_level_crossing',
-        parameters=[{
-            'use_sim_time': use_sim_time,
-            'start_x': float(START_X),
-            'start_y': float(START_Y),
-        }],
+        parameters=[course_params, {'use_sim_time': use_sim_time}],
         output='screen',
     )
 
