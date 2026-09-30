@@ -35,10 +35,13 @@ def generate_launch_description():
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     camera_topic = LaunchConfiguration('camera_topic')
+    camera_info_topic = LaunchConfiguration('camera_info_topic')
 
     declare_args = [
         DeclareLaunchArgument('use_sim_time', default_value='true'),
-        DeclareLaunchArgument('camera_topic', default_value='/camera/image_raw'),
+        # The downward looking lane camera; the forward one is for signs.
+        DeclareLaunchArgument('camera_topic', default_value='/camera_lane/image_raw'),
+        DeclareLaunchArgument('camera_info_topic', default_value='/camera_lane/camera_info'),
     ]
 
     sim_time = {'use_sim_time': use_sim_time}
@@ -51,6 +54,7 @@ def generate_launch_description():
         parameters=[params, sim_time],
         remappings=[
             ('/camera/image_input', camera_topic),
+            ('/camera/camera_info', camera_info_topic),
             ('/camera/image_output', '/camera/image_projected'),
         ],
     )

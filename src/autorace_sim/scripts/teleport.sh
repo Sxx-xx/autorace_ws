@@ -4,7 +4,7 @@ set -e
 X=${1:?usage: teleport.sh X Y [YAW] [MODEL]}
 Y=${2:?usage: teleport.sh X Y [YAW] [MODEL]}
 YAW=${3:-0.0}
-MODEL=${4:-autorace_waffle_pi}
+MODEL=${4:-autorace_burger}
 QZ=$(python3 -c "import math; print(math.sin($YAW/2))")
 QW=$(python3 -c "import math; print(math.cos($YAW/2))")
 ros2 service call /world/autorace/set_pose ros_gz_interfaces/srv/SetEntityPose \
