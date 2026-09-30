@@ -1,0 +1,167 @@
+AutoRace 시뮬레이션 작업 정리 (2026-09-30)
+============================================
+
+모든 변경은 아직 커밋하지 않았다 (마지막 커밋: 907d077).
+
+
+1. 끼임 감지 수정 (커밋 완료: 907d077)
+----------------------------------------
+파일: src/autorace_core/autorace_core/cmd_vel_mux.py
+
+- 문제: 라이다 스캔을 직전 프레임과 비교해 끼임을 판단했는데, 시뮬 라이다 노이즈(σ 1 cm)
+  때문에 정지(차이 약 0.011 m)와 0.05 m/s 주행(약 0.012 m)이 구분되지 않았다.
+  임계값 0.015 아래라 정상 주행 중에도 3초마다 후진했을 것.
+- 수정: 전진 명령이 시작된 시점의 스캔을 기준으로 blocked_timeout(3 s) 뒤에
+  중앙값 차이를 비교. 임계값 0.03 m.
+- 결과: 오탐 없음. 벽/장애물에 닿았을 때 정상 발동.
+- 남은 문제: 후진이 직선이라 방향이 그대로여서 같은 장애물에 다시 부딪힌다.
+
+
+2. 시뮬 코스를 대회 맵(map.png)으로 교체
+------------------------------------------
+- 기존 월드(autorace_2023.sdf)는 이름만 2023이고 실제로는 ROBOTIS의
+  turtlebot3_autorace_2020.world였다. 대회 코스와 배치가 전혀 다름.
+- 새 월드: src/autorace_sim/worlds/autorace_course.sdf (런치 기본값으로 변경)
+- 생성 스크립트 (월드를 손으로 고치지 말고 이것을 다시 실행):
+    src/autorace_sim/scripts/gen_course_texture.py  map.png → 바닥 텍스처
+    src/autorace_sim/scripts/gen_course_world.py    배치 → 월드, params/course*.yaml
+- map.png는 325 x 309 px라 가로/세로 축척을 따로 적용 (4 m x 4 m).
+- 좌표계: 경기장 중심이 원점, 상공 카메라 기준 위 = +X, 왼쪽 = +Y (기존과 동일).
+
+배치 (월드 좌표, m)
+- 출발: (1.767, 0.695), yaw = π/2 (+Y 방향). 출발선 뒤 약 0.2 m.
+- 신호등: (1.961, 1.372). 로봇 진행 방향 오른쪽.
+- 터널: X 0~2, Y -2~0 사분면. 벽 높이 0.24 m, 내부 약 1.83 m, 지붕 있음.
+  입구는 오른쪽 아래 도로(X ≈ 0), 출구는 위쪽 도로(Y ≈ 0).
+  내부 장애물 3개 (상자 2, 원기둥 1) - 형태/위치는 임의로 정함.
+- 공사 구간: 폭이 두 배인 왼쪽 도로에 장애물 3개, 각 0.24 x 0.09 m (map.png 실측),
+  높이 0.20 m (Burger 라이다 높이 약 0.18 m보다 높게).
+- 주차: 입구 양옆 두 칸. 하우스 로봇(Burger 크기 상자)은 기본 왼쪽 칸.
+- 차단바: 힌지 (-1.055, -0.634), 로봇은 +Y 방향으로 접근.
+  센서1 (-1.249, -1.084), 센서2 (-1.249, -0.694) = 차단바 6 cm 앞.
+- 표지판: 갈림길, 방향(좌/우), 공사, 주차, 터널.
+
+코스 관련 스크립트
+- scripts/intersection.sh left|right   갈림길 방향 표지판 바꾸기
+- scripts/parking.sh left|right        하우스 로봇 주차 칸 바꾸기
+- scripts/teleport.sh X Y [YAW]        로봇 이동 (기본 모델명 autorace_burger)
+
+시뮬 노드 수정
+- sim_level_crossing.py: 출발 yaw 반영(odom 회전), 센서2를 좌표로 직접 받음
+  (이전에는 +x 방향 접근을 가정).
+- sim_traffic_light, sim_level_crossing 파라미터는 params/course_sim_nodes.yaml에서 읽음.
+
+map.png와 규정의 차이 (그림 기준으로 만듦)
+- 차선 폭: 그림 약 0.27 m (선 중심 간격 약 0.25 m) / 규정 0.30 m (양쪽 차선 포함)
+- 터널: 그림 2.0 x 2.0 m / 규정 내부 약 1.8 x 1.8 m (벽을 안쪽으로 넣어 맞춤)
+- 바닥: 그림의 밝은 회색을 그대로 사용. 실제 대회장 바닥색은 확인 필요.
+
+
+3. 로봇을 TurtleBot3 Burger로 교체
+-----------------------------------
+- 이전 Waffle Pi는 폭 약 0.31 m로 주행로(0.30 m)와 거의 같아 여유가 없었다.
+- 새 모델: src/autorace_sim/models/autorace_burger
+  (turtlebot3_burger_cam 기반, 폭 0.178 m, 바퀴 간격 0.160 m, 라이다 5 Hz)
+- 원본 모델의 몸체 관성 모멘트 0.72 kg·m²가 실제(약 0.0027)의 약 270배라
+  정지 상태에서도 앞뒤로 흔들리며 카메라가 틀어졌다 → 0.0027로 수정.
+- launch에서 TURTLEBOT3_MODEL=burger 강제.
+
+카메라 2대
+- 전방 카메라 (신호등/표지판): 바퀴 축 앞 0.045 m, 높이 약 0.12 m, 0.10 rad 숙임
+  토픽 /camera/image_raw, /camera/camera_info (표지판 쪽 코드는 그대로)
+- 차선 카메라: 바퀴 축 앞 0.030 m, 노면 위 0.22 m, 1.05 rad(약 60°) 숙임
+  토픽 /camera_lane/image_raw, /camera_lane/camera_info
+  화면 맨 아래에 로봇 앞판이 살짝 보임.
+  보이는 바닥: 바퀴 축 기준 0.07~0.32 m 앞, 폭 ±0.12 m(가까운 쪽) ~ ±0.21 m(먼 쪽)
+- 검증: 직선 구간 BEV에서 두 선 안쪽 간격 0.220 → 0.218 m (평행, 오차 2.5 mm 이내)
+- 실기체도 같은 위치/각도로 달아야 이 설정이 맞다. 다르면 perception_sim.yaml의
+  camera.height / camera.pitch / camera.forward_offset 수정.
+
+
+4. 차선 인식 수정
+------------------
+파일: src/autorace_perception/autorace_perception/detect_lane.py
+      src/autorace_bringup/param/perception_sim.yaml
+      src/autorace_bringup/launch/lane_drive.launch.py (차선 카메라 사용)
+
+(1) 흰선을 top-hat 필터로 검출 (detect.white_contrast_min: 20)
+    - 새 코스는 도로 밖 바닥이 밝은 회색(밝기 약 190)이라 흰선(약 232)과 한 덩어리로
+      잡히고, 두꺼운 영역 제거 단계에서 흰선까지 지워졌다.
+    - 이제 주변보다 밝고 선 폭보다 얇은 띠만 흰선으로 인정.
+    - BEV 바깥(검은 영역) 경계는 밝게 취급해 가짜 띠가 생기지 않게 함.
+(2) 픽셀 수가 min_pixels 미만이면 "선 없음"으로 신뢰도 계산
+    - 이전에는 도로가 안 보여도 가장자리 잡음이 많은 행에 걸쳐 신뢰도 100 유지.
+(3) max_missing_fraction 0.55 → 0.8
+    - 커브 안쪽 노란선은 BEV 아래 일부 행에만 보여서 신뢰도 0 → 주행선으로 안 씀.
+(4) 선이 제어 기준점 근처(5 cm, lane.reach_tolerance_m)까지 실제로 보일 때만 중심 계산에 사용
+    - 짧게 보이는 안쪽 선을 2차 곡선으로 연장하면 크게 휘어서 중심이 노란선 쪽으로 끌려갔다
+      (첫 곡선에서 노란선으로 파고들던 원인).
+(5) 좌우 검사(흰선은 오른쪽, 노란선은 왼쪽)를 선이 보이는 가장 가까운 행에서 수행
+    - 급커브에서는 바깥 흰선도 기준점에서는 왼쪽에 와서, 흰선이 탈락하고
+      제어기가 안쪽으로 탐색 회전했다.
+(6) 조향 기준점 control_lookahead 0.45 → 0.25 m (차선 카메라 시야에 맞춤)
+    - 멀리 보면 커브에 닿기 전에 미리 돈다.
+
+BEV 파라미터 (차선 카메라 기준): height 0.22, pitch 1.05, forward_offset 0.030,
+출력 800 x 300 px, 1200 px/m, near 0.07 m.
+
+
+5. 주행 테스트 결과
+--------------------
+최신 (카메라 2대, 차선 카메라 1.05 rad), 출발선에서 차선 주행 스택만:
+- 출발 → 첫 곡선 → 갈림길 원형 구간(아래쪽 경로) → S자 구간 → 공사 구간까지
+  차선 안에서 부드럽게 주행.
+- 공사 구간 첫 장애물은 비켜 갔고, 두 번째 장애물 (-0.92, 1.78)에 걸려 185초에 정지.
+  (공사 구간 회피 미션이 아직 없으므로 예상된 결과)
+- 궤적 그림: log/lap_test/lanecam1/lap.png
+
+이전 (카메라 1대, 0.50 rad): 공사 구간 첫 장애물에서 이탈, 276초에 정지.
+
+
+6. 알려진 문제 / 다음 할 일
+----------------------------
+- 공사 구간 회피 미션 (라이다 기반) - 현재 차선 추종만으로는 장애물에 걸림.
+- mux 후진 탈출: 직선 후진이라 같은 곳에 다시 부딪힘 → 후진하며 회전 필요.
+- 터널: 지붕은 있지만 조명(ambient)이 밝아 실제 암전이 재현되지 않음.
+  터널 내부 주행(라이다 반응형) 미구현.
+- 신호등/표지판 인식은 새 전방 카메라 위치로 아직 확인하지 않음.
+- 차선 카메라 시야가 좁아(가까운 쪽 ±0.12 m) 노란선 바깥쪽이 화면에서 잘림.
+  인식에는 문제 없으나 로봇이 차선에서 많이 벗어나면 선을 잃을 수 있음.
+- 흰색 바깥선이 텍스처에서 일부 구간 흐릿함 (map.png 해상도 한계).
+- docs/SIM_NOTES.md의 좌표/카메라 값은 이전 코스와 Waffle Pi 기준이라 갱신 필요.
+- 실기체 카메라 장착 위치/각도 확정 후 perception 파라미터 반영.
+
+
+7. 실행 방법
+-------------
+  cd ~/Desktop/autorace_ws
+  colcon build --symlink-install
+  source install/setup.bash
+  ros2 launch autorace_sim autorace_world.launch.py        # 시뮬 (출발선에 스폰)
+  ros2 launch autorace_bringup lane_drive.launch.py       # 차선 주행
+
+  시뮬 종료 후에는 gz 서버가 남을 수 있음 (SIM_NOTES 참고):
+  pkill -f 'gz[ ]sim'; pkill -f 'ruby.*gz[ ]sim'
+
+
+8. 변경 파일
+-------------
+수정
+  src/autorace_core/autorace_core/cmd_vel_mux.py (커밋됨)
+  docs/SIM_NOTES.md (터널 위치 정정)
+  src/autorace_bringup/launch/lane_drive.launch.py
+  src/autorace_bringup/param/perception_sim.yaml
+  src/autorace_perception/autorace_perception/detect_lane.py
+  src/autorace_sim/autorace_sim/sim_level_crossing.py
+  src/autorace_sim/launch/autorace_world.launch.py
+  src/autorace_sim/params/autorace_bridge.yaml
+  src/autorace_sim/scripts/teleport.sh
+  src/autorace_sim/scripts/convert_models.py, gen_world.py (실행 권한만)
+추가
+  map.png
+  src/autorace_sim/models/autorace_burger/
+  src/autorace_sim/models/autorace_course_map/
+  src/autorace_sim/worlds/autorace_course.sdf
+  src/autorace_sim/params/course.yaml, course_sim_nodes.yaml
+  src/autorace_sim/scripts/gen_course_texture.py, gen_course_world.py
+  src/autorace_sim/scripts/intersection.sh, parking.sh
