@@ -77,9 +77,15 @@ class DetectLane(Node):
         self.declare_parameter('bev.near', 0.24)
         self.declare_parameter('lane.width_m', 0.25)
         self.declare_parameter('lane.control_lookahead', 0.45)
+        # A line counts towards the lane centre only if it was seen this close
+        # to the control point.
+        self.declare_parameter('lane.reach_tolerance_m', 0.05)
 
         self.declare_parameter('detect.min_pixels', 3000)
         self.declare_parameter('detect.max_line_width_m', 0.08)
+        # How much brighter than its surroundings a white line must be; 0 turns
+        # the check off.
+        self.declare_parameter('detect.white_contrast_min', 20)
         self.declare_parameter('detect.side_margin_m', 0.05)
         self.declare_parameter('detect.auto_threshold', True)
         self.declare_parameter('detect.auto_threshold_low', 5000)
@@ -95,11 +101,15 @@ class DetectLane(Node):
         self.near = self.get_parameter('bev.near').value
         self.lane_width_px = self.get_parameter('lane.width_m').value * self.ppm
         self.lookahead = self.get_parameter('lane.control_lookahead').value
+        self.reach_tolerance_px = self.get_parameter('lane.reach_tolerance_m').value * self.ppm
 
         self.min_pixels = self.get_parameter('detect.min_pixels').value
         blob_px = int(self.get_parameter('detect.max_line_width_m').value * self.ppm)
         self.blob_kernel_h = np.ones((1, max(3, blob_px)), np.uint8)
         self.blob_kernel_v = np.ones((max(3, blob_px), 1), np.uint8)
+        self.contrast_kernel = np.ones((max(3, blob_px), max(3, blob_px)), np.uint8)
+        self.edge_kernel = np.ones((7, 7), np.uint8)
+        self.white_contrast_min = self.get_parameter('detect.white_contrast_min').value
         self.side_margin_px = self.get_parameter('detect.side_margin_m').value * self.ppm
         self.auto_threshold = self.get_parameter('detect.auto_threshold').value
         self.auto_low = self.get_parameter('detect.auto_threshold_low').value
@@ -123,6 +133,11 @@ class DetectLane(Node):
         self.right_fit = None     # white line, to the robot's right
         self.left_fitx = None
         self.right_fitx = None
+        # Highest and lowest bird's eye rows each line was actually seen on.
+        self.left_top = None
+        self.right_top = None
+        self.left_bottom = None
+        self.right_bottom = None
         self.last_center = None
         self.last_center_time = 0.0
 
@@ -167,8 +182,30 @@ class DetectLane(Node):
         wide_v = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.blob_kernel_v)
         return cv2.subtract(mask, cv2.bitwise_and(wide_h, wide_v))
 
-    def mask_line(self, hsv, bounds, reliability):
-        mask = self.drop_blobs(cv2.inRange(hsv, bounds['lower'], bounds['upper']))
+    def thin_bright(self, hsv):
+        """Pixels brighter than their surroundings in a strip thinner than a line.
+
+        Colour alone cannot tell a white line from a light grey floor next to
+        it: in simulation the two differ by only about 40 in lightness, and on
+        the real course the floor is whatever the venue has. A top-hat keeps
+        what stands out from its neighbourhood at the scale of a line, so the
+        floor drops out whatever its brightness, while the line survives next
+        to it as well as next to the black road.
+        """
+        # Outside the camera's view the bird's eye image is pure black, which
+        # would make the floor next to it look like a bright strip. Count it,
+        # and the few interpolated pixels along its edge, as bright instead.
+        outside = cv2.dilate((hsv.max(axis=2) == 0).astype(np.uint8), self.edge_kernel)
+        value = hsv[..., 2].copy()
+        value[outside > 0] = 255
+        tophat = cv2.morphologyEx(value, cv2.MORPH_TOPHAT, self.contrast_kernel)
+        return (tophat >= self.white_contrast_min).astype(np.uint8) * 255
+
+    def mask_line(self, hsv, bounds, reliability, only=None):
+        mask = cv2.inRange(hsv, bounds['lower'], bounds['upper'])
+        if only is not None:
+            mask = cv2.bitwise_and(mask, only)
+        mask = self.drop_blobs(mask)
         pixels = int(np.count_nonzero(mask))
 
         if self.auto_threshold:
@@ -181,7 +218,8 @@ class DetectLane(Node):
 
         rows_with_line = int(np.count_nonzero(mask.any(axis=1)))
         missing = 1.0 - rows_with_line / mask.shape[0]
-        if missing > self.max_missing_fraction:
+        # A scatter of stray pixels can touch many rows; it is not a line.
+        if missing > self.max_missing_fraction or pixels < self.min_pixels:
             reliability = max(0, reliability - self.reliability_step)
         else:
             reliability = min(100, reliability + self.reliability_step)
@@ -198,7 +236,8 @@ class DetectLane(Node):
         inside = (nonzero_x > centers - margin) & (nonzero_x < centers + margin)
         if np.count_nonzero(inside) < 50:
             return None
-        return np.polyfit(nonzero_y[inside], nonzero_x[inside], 2)
+        return (np.polyfit(nonzero_y[inside], nonzero_x[inside], 2),
+                int(nonzero_y[inside].min()), int(nonzero_y[inside].max()))
 
     def fit_sliding_window(self, mask, side, windows=20, margin=50, min_pixels=50):
         height, width = mask.shape
@@ -228,14 +267,19 @@ class DetectLane(Node):
         collected = np.concatenate(collected)
         if len(collected) < 50:
             return None
-        return np.polyfit(nonzero_y[collected], nonzero_x[collected], 2)
+        return (np.polyfit(nonzero_y[collected], nonzero_x[collected], 2),
+                int(nonzero_y[collected].min()), int(nonzero_y[collected].max()))
 
     def update_line(self, fit, mask, side):
-        """Track the line from the previous fit, falling back to a fresh search."""
-        new_fit = self.fit_around(fit, mask) if fit is not None else None
-        if new_fit is None:
-            new_fit = self.fit_sliding_window(mask, side)
-        return new_fit
+        """Track the line from the previous fit, falling back to a fresh search.
+
+        Returns the fit and the highest (furthest) and lowest (nearest) rows
+        it was fitted on, or None.
+        """
+        result = self.fit_around(fit, mask) if fit is not None else None
+        if result is None:
+            result = self.fit_sliding_window(mask, side)
+        return result
 
     # --- main ------------------------------------------------------------
 
@@ -251,7 +295,8 @@ class DetectLane(Node):
         yellow_pixels, yellow_mask, self.reliability_yellow = self.mask_line(
             hsv, self.yellow, self.reliability_yellow)
         white_pixels, white_mask, self.reliability_white = self.mask_line(
-            hsv, self.white, self.reliability_white)
+            hsv, self.white, self.reliability_white,
+            only=self.thin_bright(hsv) if self.white_contrast_min > 0 else None)
 
         self.pub_reliability_yellow.publish(UInt8(data=self.reliability_yellow))
         self.pub_reliability_white.publish(UInt8(data=self.reliability_white))
@@ -259,14 +304,16 @@ class DetectLane(Node):
         plot_y = np.linspace(0, height - 1, height)
 
         if yellow_pixels > self.min_pixels:
-            fit = self.update_line(self.left_fit, yellow_mask, 'left')
-            if fit is not None:
+            result = self.update_line(self.left_fit, yellow_mask, 'left')
+            if result is not None:
+                fit, self.left_top, self.left_bottom = result
                 self.left_fit = fit
                 self.left_fitx = fit[0] * plot_y ** 2 + fit[1] * plot_y + fit[2]
 
         if white_pixels > self.min_pixels:
-            fit = self.update_line(self.right_fit, white_mask, 'right')
-            if fit is not None:
+            result = self.update_line(self.right_fit, white_mask, 'right')
+            if result is not None:
+                fit, self.right_top, self.right_bottom = result
                 self.right_fit = fit
                 self.right_fitx = fit[0] * plot_y ** 2 + fit[1] * plot_y + fit[2]
 
@@ -280,17 +327,20 @@ class DetectLane(Node):
         line that has wandered to the left of centre means the robot is outside
         the lane, and steering half a lane further left would take it off the
         course.
+
+        The check is made where the line is closest to the robot. Further out,
+        in a tight bend, the outer line legitimately crosses to the other
+        side: checked there, the white line of a left bend gets thrown out
+        and the robot, left with nothing, turns into the inside of the bend.
         """
         center = width / 2.0
         if side == 'left':
             return (self.reliability_yellow > self.reliability_threshold
                     and self.left_fitx is not None
-                    and self.left_fitx[self.control_row(len(self.left_fitx))]
-                    < center + self.side_margin_px)
+                    and self.left_fitx[self.left_bottom] < center + self.side_margin_px)
         return (self.reliability_white > self.reliability_threshold
                 and self.right_fitx is not None
-                and self.right_fitx[self.control_row(len(self.right_fitx))]
-                > center - self.side_margin_px)
+                and self.right_fitx[self.right_bottom] > center - self.side_margin_px)
 
     def publish_lane(self, image, plot_y, yellow_pixels, white_pixels, header):
         height, width = image.shape[:2]
@@ -301,8 +351,23 @@ class DetectLane(Node):
         state = LANE_NONE
 
         if fresh_yellow and fresh_white:
-            center_x = np.mean([self.left_fitx, self.right_fitx], axis=0)
-            state = LANE_BOTH
+            # Only average lines that were seen as far out as the control
+            # point. In a tight bend the inner line shows up only as a short
+            # arc near the robot, and its fit extended out to the control
+            # point swings wildly; averaging with it steers the robot onto
+            # that line.
+            row = self.control_row(height)
+            yellow_reaches = self.left_top <= row + self.reach_tolerance_px
+            white_reaches = self.right_top <= row + self.reach_tolerance_px
+            if yellow_reaches == white_reaches:
+                center_x = np.mean([self.left_fitx, self.right_fitx], axis=0)
+                state = LANE_BOTH
+            elif white_reaches:
+                center_x = self.right_fitx - self.lane_width_px / 2.0
+                state = LANE_RIGHT_ONLY
+            else:
+                center_x = self.left_fitx + self.lane_width_px / 2.0
+                state = LANE_LEFT_ONLY
         elif fresh_yellow:
             center_x = self.left_fitx + self.lane_width_px / 2.0
             state = LANE_LEFT_ONLY
