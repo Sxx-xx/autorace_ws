@@ -27,9 +27,11 @@ forward on its own.
 """
 
 from geometry_msgs.msg import Twist
+import numpy as np
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
 
 
@@ -57,6 +59,7 @@ class CmdVelMux(Node):
         self.declare_parameter('blocked_timeout', 3.0)
         self.declare_parameter('unstick_duration', 1.5)
         self.declare_parameter('unstick_speed', -0.07)
+        self.declare_parameter('scan_change_threshold', 0.03)
 
         self.input_timeout = self.get_parameter('input_timeout').value
         self.stall_timeout = self.get_parameter('stall_timeout').value
@@ -65,6 +68,7 @@ class CmdVelMux(Node):
         self.blocked_timeout = self.get_parameter('blocked_timeout').value
         self.unstick_duration = self.get_parameter('unstick_duration').value
         self.unstick_speed = self.get_parameter('unstick_speed').value
+        self.scan_change_threshold = self.get_parameter('scan_change_threshold').value
         publish_rate = self.get_parameter('publish_rate').value
 
         self.commands = {name: None for name, _ in INPUTS}
@@ -83,6 +87,7 @@ class CmdVelMux(Node):
         self.run_active = False
         self.create_subscription(Bool, '/autorace/run_active', self.callback_run_active, 1)
         self.create_subscription(Odometry, '/odom', self.callback_odom, 1)
+        self.create_subscription(LaserScan, '/scan', self.callback_scan, 1)
 
         self.pub_cmd_vel = self.create_publisher(Twist, '/cmd_vel', 1)
         self.pub_active_input = self.create_publisher(Bool, '/autorace/mux_stalled', 1)
@@ -93,6 +98,8 @@ class CmdVelMux(Node):
 
         # Told to move but not moving: something is in the way.
         self.measured_speed = 0.0
+        self.latest_scan = None
+        self.reference_scan = None
         self.pushing_since = None
         self.unstick_until = None
 
@@ -104,6 +111,32 @@ class CmdVelMux(Node):
 
     def callback_odom(self, msg):
         self.measured_speed = abs(msg.twist.twist.linear.x)
+
+    def callback_scan(self, msg):
+        ranges = np.array(msg.ranges, dtype=np.float32)
+        valid = np.isfinite(ranges) & (ranges > msg.range_min) & (ranges < msg.range_max)
+        ranges[~valid] = np.nan
+        self.latest_scan = ranges
+
+    def scan_change(self):
+        """How far the view has moved since pushing began, in metres.
+
+        A second opinion on motion: when the robot is wedged against
+        something the wheels keep turning and /odom keeps reporting the
+        commanded speed. Scan to scan the laser noise (1 cm) swamps the few
+        millimetres the robot moves, so compare against the scan taken when
+        pushing began instead. None when there is too little to compare,
+        e.g. out in the open.
+        """
+        if self.reference_scan is None or self.latest_scan is None:
+            return None
+        if self.reference_scan.shape != self.latest_scan.shape:
+            return None
+        difference = np.abs(self.latest_scan - self.reference_scan)
+        difference = difference[np.isfinite(difference)]
+        if difference.size <= 20:
+            return None
+        return float(np.median(difference))
 
     def callback_run_active(self, msg):
         if msg.data and not self.run_active:
@@ -166,8 +199,9 @@ class CmdVelMux(Node):
         """Back off when the robot is driving into something.
 
         Touching an obstacle costs nothing in this competition but pushing
-        against it burns the clock, and the wheels turning is enough to hide
-        the problem from the stall watchdog, which only sees the command.
+        against it burns the clock, and neither the command nor the wheel
+        odometry shows the problem: the wheels keep turning against the
+        obstacle. The laser is what notices that nothing is moving.
         """
         if self.unstick_until is not None:
             if now < self.unstick_until:
@@ -178,15 +212,23 @@ class CmdVelMux(Node):
             self.pushing_since = None
             return command, name
 
-        wants_to_move = command.linear.x > 0.01
-        if wants_to_move and self.measured_speed < 0.01:
-            if self.pushing_since is None:
-                self.pushing_since = now
-            elif now - self.pushing_since > self.blocked_timeout:
+        if command.linear.x <= 0.01:
+            self.pushing_since = None
+            return command, name
+
+        if self.pushing_since is None:
+            self.pushing_since = now
+            self.reference_scan = self.latest_scan
+        elif now - self.pushing_since > self.blocked_timeout:
+            change = self.scan_change()
+            wedged = change is not None and change < self.scan_change_threshold
+            if self.measured_speed < 0.01 or wedged:
                 self.get_logger().error('Robot is blocked, backing off.')
                 self.unstick_until = now + self.unstick_duration
-        else:
-            self.pushing_since = None
+            else:
+                # Made progress: start the next window from here.
+                self.pushing_since = now
+                self.reference_scan = self.latest_scan
 
         return command, name
 
