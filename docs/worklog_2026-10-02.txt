@@ -1,0 +1,179 @@
+AutoRace 시뮬레이션 작업 정리 (2026-10-02 ~ 10-03)
+==================================================
+
+10/1 일지의 작업과 이번 작업을 함께 커밋했다 (이전 마지막 커밋: 3babd64).
+출발선에서 차단바 통과까지 전체 주행이 된다. 남은 미션은 터널.
+
+
+1. 공사 구간 미션
+------------------
+파일: autorace_core/construction_mission.py
+
+- 시작: 표지판을 쓰지 않는다. 차선 주행 중 로봇 앞 0.45 m, 좌우 ±13 cm 안에 라이다 점이
+  2회 연속 잡히면 이 노드가 /autorace/trigger 로 미션을 요청하고 바로 인계받는다.
+  커브를 도는 중(차선 조향 곡률 2 /m 초과)에는 앞 0.20 m까지만 본다. 커브에서는 앞쪽 띠가
+  커브 너머의 것을 훑고 지나가서, 그대로 두면 도로가 휘어 있는 곳에서 인계가 일어난다.
+- 장애물 지도: 1 m 이내 라이다 점을 오도메트리 기준 1 cm 격자에 항상 누적한다
+  (미션 시작 전부터). 스캔마다 7 %씩 옅어진다. 자주 맞는 칸만 장애물로 본다
+  (2회 이상, 주변 최댓값의 25 % 이상) - 라이다 노이즈(σ 1 cm)로 번지는 것을 막기 위함.
+- 도로: 차선 검출기가 내보내는 선 점(/detect/lane_lines/yellow, /white - 이번에 추가)을
+  최근 1.5 m 구간만큼 기억하고, 직선을 맞춰 도로 방향과 양쪽 가장자리를 구한다.
+  한쪽 선만 봤으면 반대쪽은 0.60 m 떨어져 있다고 가정한다. 장애물 뒤쪽에 찍힌 선 점은 버린다.
+- 경로: 도로 방향으로 눕힌 격자에서 로봇 위치부터 열 단위로 최소 비용 경로를 잡는다
+  (장애물/선에서 멀수록, 옆으로 덜 움직일수록 좋음). 0.1초마다 다시 잡고,
+  0.11 m 앞 점을 향해 조향한다. 속도 0.10 m/s.
+- 종료: 도로 안 앞쪽 0.60 m, 뒤쪽 0.13 m에 장애물이 없으면 차선 주행으로 돌려준다.
+- 표지판 인식(공사)은 만들었다가 뺐다. 표지판 없이 시작해도 통과하고, 지도를 항상 쌓으니
+  첫 장애물 여유도 차이가 없었다.
+
+결과 (차체와 장애물 사이 여유, 장애물 1 / 2 / 3)
+  구간만 3회             2.2~2.8 / 3.7~3.8 / 2.7~2.8 cm
+  전체 주행 8회          1.7~3.0 / 3.7~4.1 / 2.7~2.9 cm
+  모두 통과, 구간 안에서 선을 밟지 않음. 구간 통과 약 17.5초.
+  틈 자체가 로봇보다 약 5~7 cm 넓을 뿐이라 여유는 이 정도가 한계다.
+
+안 되는 것
+- 첫 장애물이 흰선 쪽에 오는 반대 배치: 커브 출구에서 바로 장애물을 만나 들이받는다.
+  차선 검출기의 lane.fork_side 를 left 로 바꾸면 될 것으로 보지만 돌려 보지 않았다.
+
+
+2. 주차 미션
+-------------
+파일: autorace_core/parking_mission.py, autorace_perception/detect_sign.py (parking 추가)
+
+- 주차 표지판(파란 사각형 + 흰 P)을 보면 시작. /detect/lane_follow 에 left 를 보내
+  왼쪽(노란) 선을 따라가게 해서 진입로로 좌회전한다.
+- 진입로는 양쪽이 노란선이다. 흰선 없이 0.3 m 이상 달린 뒤 흰 점선이 차선 카메라에 잡히면
+  주차장 입구로 보고, 점선 시작 위치와 통로 중앙을 잡는다.
+- 빈 칸: 진입로에서 라이다로 앞쪽 좌/우 영역(옆 0.12~0.45 m, 앞 0.9 m)의 점 수를 누적.
+  점이 많은 쪽이 주차된 칸. 테스트에서 150~450 대 0. 둘 다 0이면 default_bay(left).
+- 진입: 칸 중앙 높이 10 cm 전부터 반지름 0.10 m 원호로 돌아 들어가 0.29 m 진입, 1초 정지.
+- 나가기: 후진으로 통로 중앙 6 cm 전까지 → 제자리에서 같은 방향으로 돌아 진입로를 봄 →
+  통로와 진입로 0.3 m 직진 → 다시 left 로 차선 주행에 넘김 → 로봇 방향이 본선 방향이 되면 종료.
+  진입로의 왼쪽 노란선이 본선으로 이어져 있어 원래 진행 방향으로 나간다.
+- 원호 진입과 중앙 전 회전은 로봇 꼬리 때문이다. 차체가 바퀴 축 뒤로 10 cm 나와 있어
+  통로 중앙에서 제자리 회전하면 주차된 로봇과 1.1 cm까지 가까워졌다.
+- 통로에서는 양쪽 점선(진입로에서는 노란선)으로 중앙을 다시 맞춘다. 제자리 회전과 후진을
+  거치면 오도메트리 위치가 실제와 3~4 cm 어긋났다.
+
+결과: 주차만 4회(좌/우 각 2회), 전체 주행 4회 모두 통과.
+  빈 칸 안에 차체 100 % (깊이 0.29 m 적용 후), 주차된 로봇과 여유 5.5~7.7 cm.
+  칸 안에서 최대 16° 비스듬히 선다.
+
+
+3. 차단바 미션
+---------------
+파일: autorace_perception/detect_level_crossing.py, autorace_core/level_crossing_mission.py
+
+- 인식: 전방 카메라에서 속이 찬 빨간 조각이 줄지어 있으면 차단바(줄무늬). 줄이 선 방향이
+  수직에서 20° 넘게 기울면 "내려옴"(내려오는 중 포함). /detect/level_crossing (0 없음, 1 열림, 2 닫힘).
+  표지판 테두리, 정지선, 빨간 신호등에는 반응하지 않는 것을 캡처 화면으로 확인.
+- 닫힘이 2프레임 연속이면 미션 요청. 라이다로 차단바까지 거리를 재면서 다가가
+  로봇 앞면이 차단바 0.10 m 앞(stop_gap)에 멈춘다. 2번 센서는 6 cm 앞.
+  스캔 사이에는 오도메트리로 거리를 이어 계산한다 (라이다 5 Hz).
+- 라이다가 차단바를 못 잡는 동안은 카메라가 차단바를 보고 있는 한 0.05 m/s로 다가간다.
+  카메라는 약 0.35 m보다 가까우면 차단바가 화면 위로 벗어난다.
+- 출발: 라이다에서 앞이 5스캔(1초) 연속 비어 있고 카메라도 닫힘을 보지 않을 때.
+
+결과 (바퀴 축에서 차단바까지; 시뮬은 0.14 m 안으로 들어오면 실패)
+  1번 센서 0.30 / 0.34 / 0.45 / 0.60 / 0.80 m: 대기 0.17~0.18 m, 통과
+  전체 주행 (0.62 m, 랜덤): 대기 0.17 m, 통과. 가장 가까웠던 순간 0.16 m.
+
+주의
+- 시뮬 차단바 아랫면(0.175 m)이 라이다 높이(약 0.18 m)보다 1 cm도 낮지 않다. 멀리서는
+  로봇이 조금만 끄덕여도 놓친다. 실제 차단바 높이가 다르면 거리 측정 방식을 바꿔야 한다.
+- 1번 센서가 0.30 m보다 가까운 경우는 테스트하지 않았다.
+
+
+4. 신호등 정지선 정렬 수정
+---------------------------
+파일: autorace_core/traffic_light_mission.py
+
+- 로봇이 차선 중앙에서 2 cm 옆에 놓이면 정지선에서 10° 틀어져 신호등이 화면 끝에 잘리고
+  초록불을 못 봤다. 조향 목표점을 향해 돌고 있었기 때문.
+- 차선의 선(안쪽 가장자리) 방향에 맞춰 정렬하도록 변경.
+- 좌우 2 cm 어긋남, 15~16° 틀어짐 4가지 출발 모두 초록불에 출발.
+
+
+5. 끼임 감지 수정
+------------------
+파일: autorace_core/cmd_vel_mux.py
+
+- 차단바 직후 직선에서 오작동해 3초쯤 후진했다. 라이다에 보이는 것이 진행 방향과 나란한
+  터널 벽뿐이라 스캔 중앙값이 거의 변하지 않았다.
+- "5 cm 이상 변한 점이 5 % 미만이면 끼임"으로 변경. 이후 재발 없음.
+
+
+6. 시뮬 변경
+-------------
+- 차단바 센서 표시: 1번 초록 원판, 2번 빨간 원판 (바닥, 높이 2 mm).
+  로봇 카메라 두 대에는 그려지지 않는다 (visibility_flags / visibility_mask). 가제보 창에서만 보인다.
+- 1번 센서는 매 바퀴 차단바 0.30~0.85 m 앞 사이에 랜덤으로 놓인다.
+  고정: ros2 topic pub --once /sim/level_crossing/sensor1_distance std_msgs/msg/Float64 "{data: 0.45}"
+  (0 이면 랜덤). 로봇이 1.5 m 이상 멀어지면 다시 준비된다.
+- sim_level_crossing 이 로봇 위치를 오도메트리 대신 가제보의 실제 위치로 읽는다
+  (순간이동해도 맞음).
+- 월드는 gen_course_world.py 로 다시 생성했다 (표시 두 개만 추가됨).
+
+
+7. 전체 주행 결과
+------------------
+  출발 → 공사 구간 입구 차선 오차   평균 0.8~0.9 cm, 최대 3.0~3.9 cm, 선 위 1~2 %
+  지그재그 구간                     평균 0.7 cm, 최대 2.2 cm, 선 위 30 %
+                                    (오차는 작다. 대각선 구간의 차선 폭 자체가 좁다.)
+  출발선 → 주차 후 본선 복귀        2회 통과 (이정표 좌/우, 장애물 좌/우 칸)
+  출발선 → 지그재그 끝              1회 통과
+  출발선 → 차단바 통과              1회 통과
+
+
+8. 알려진 문제 / 다음 할 일
+----------------------------
+- 터널 미션 - 아직 없음.
+- 차단바까지 전체 주행은 1회만 돌렸다. 주차 깊이 0.29 m 는 전체 주행 2회에서 확인.
+- 초록불에 바로 출발하는 전체 주행은 이번 변경 뒤 다시 돌리지 않았다.
+- 가제보 창에서 월드를 리셋하면 로봇 모델이 사라지고 /odom 이 끊긴다. 시뮬을 다시 띄워야 한다.
+- 이 PC(Wayland)에서는 가제보 창이 빈 화면으로 뜬다. QT_QPA_PLATFORM=xcb 로 띄운다.
+- 순간이동 직후 로봇이 흔들리는 문제는 그대로. 흔들리는 채로 출발하면 차선/지도 인식이 깨진다.
+- 스타일 검사(ament_flake8)에 3건 남음: cmd_vel_mux import 순서, autorace_core/setup.py 긴 줄,
+  bev_projector 따옴표. 모두 이전 커밋의 것.
+- docs/SIM_NOTES.md 는 여전히 이전 코스 기준이라 갱신 필요.
+
+
+9. 실행 방법
+-------------
+  cd ~/Desktop/autorace_ws
+  colcon build --symlink-install
+  source install/setup.bash
+  QT_QPA_PLATFORM=xcb ros2 launch autorace_sim autorace_world.launch.py     # 시뮬 (gui:=false 로 창 없이)
+  ros2 launch autorace_bringup race.launch.py                               # 신호등 대기 → 전체 미션
+  ros2 launch autorace_bringup race.launch.py auto_start:=true              # 신호등 건너뛰기
+
+  이정표 바꾸기:        bash src/autorace_sim/scripts/intersection.sh left|right|random
+  주차된 로봇 옮기기:   bash src/autorace_sim/scripts/parking.sh left|right
+  디버그:  /detect/image_construction (경로 계획), /detect/construction_map (라이다 지도, rviz Map),
+           /detect/image_level_crossing, /detect/image_sign, /detect/image_lane
+  rviz:    QT_QPA_PLATFORM=xcb rviz2 -d log/lap_test/tools/construction.rviz --ros-args -p use_sim_time:=true
+
+  테스트 스크립트는 log/lap_test/tools/ 에 있다 (log/ 는 git 에 올라가지 않음).
+    run_final.sh NAME left|right left|right 400    출발선 → 차단바 통과
+    run_c.sh / run_p.sh / run_b.sh                 공사 / 주차 / 차단바 구간만
+  기록: log/lap_test/construction, parking, zigzag, crossing
+
+
+10. 변경 파일 (10/1 일지 이후)
+-------------------------------
+추가
+  src/autorace_core/autorace_core/construction_mission.py
+  src/autorace_core/autorace_core/parking_mission.py
+  src/autorace_core/autorace_core/level_crossing_mission.py
+  src/autorace_perception/autorace_perception/detect_level_crossing.py
+수정
+  src/autorace_core/autorace_core/traffic_light_mission.py     (정지선 정렬)
+  src/autorace_core/autorace_core/cmd_vel_mux.py               (끼임 감지)
+  src/autorace_perception/autorace_perception/detect_lane.py   (선 점 발행)
+  src/autorace_perception/autorace_perception/detect_sign.py   (주차 표지판)
+  src/autorace_bringup/launch/race.launch.py, param/mission_sim.yaml
+  src/autorace_core/setup.py, package.xml, src/autorace_perception/setup.py, package.xml
+  src/autorace_sim/autorace_sim/sim_level_crossing.py
+  src/autorace_sim/scripts/gen_course_world.py, worlds/autorace_course.sdf,
+  params/course_sim_nodes.yaml, models/autorace_burger/model.sdf
