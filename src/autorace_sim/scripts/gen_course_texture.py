@@ -4,7 +4,8 @@
 map.png (the "TB3 Auto Race Map" drawing at the workspace root) is only
 325 x 309 px for the 4 m x 4 m board, so it is classified into floor, road,
 yellow line and white line, the icons drawn on top of it are painted out, and
-the classes are upsampled smoothly to a square texture.
+the classes are upsampled smoothly to a square texture. The red stop line at
+the start is put back afterwards: it is paint on the floor, not an icon.
 
 Image axes: up = world +X, left = world +Y, board centre = world origin.
 """
@@ -24,13 +25,19 @@ BOARD_X = (319, 643)
 BOARD_Y = (53, 361)
 SIZE = 2000  # texture pixels for 4 m: 2 mm per pixel
 
-FLOOR, ROAD, YELLOW, WHITE = range(4)
+FLOOR, ROAD, YELLOW, WHITE, STOP = range(5)
 COLOURS = {  # BGR
     FLOOR: (204, 204, 204),
     ROAD: (20, 20, 20),
     YELLOW: (0, 215, 255),
     WHITE: (250, 250, 250),
+    STOP: (30, 30, 230),
 }
+
+# The stop line across the top road, where the robot waits for the traffic
+# light: map pixels (inclusive), as drawn.
+STOP_LINE_X = (407, 410)
+STOP_LINE_Y = (63, 79)
 
 
 def classify(image):
@@ -95,12 +102,14 @@ def paint_out(labels, box):
 def draw_intersection_island(texture):
     """Redraw the island inside the intersection loop.
 
-    The direction signs drawn on it cover almost all of it in the map. Its
-    ends are visible: white round the top, yellow round the bottom, and
-    the sides follow the same split as the map (white left, yellow right).
-    Texture pixels.
+    The direction signs drawn on it cover almost all of it in the map. What
+    shows is white round the top half and yellow round the bottom half, on
+    both sides, changing at map row 149. That gives each branch of the loop
+    the usual pair of lines: the island's white on the right of the upper
+    branch, its yellow on the left of the lower one. Texture pixels.
     """
     left, right, top, bottom = 440, 570, 424, 820
+    split = 622
     radius = (right - left) // 2
     centre_x = (left + right) // 2
     line = 14
@@ -112,8 +121,9 @@ def draw_intersection_island(texture):
     inset = line // 2
     cv2.ellipse(texture, (centre_x, top + radius), (radius - inset,) * 2,
                 0, 180, 360, white, line)
-    cv2.line(texture, (left + inset, top + radius), (left + inset, bottom - radius), white, line)
-    cv2.line(texture, (right - inset, top + radius), (right - inset, bottom - radius), yellow, line)
+    for x in (left + inset, right - inset):
+        cv2.line(texture, (x, top + radius), (x, split), white, line)
+        cv2.line(texture, (x, split), (x, bottom - radius), yellow, line)
     cv2.ellipse(texture, (centre_x, bottom - radius), (radius - inset,) * 2,
                 0, 0, 180, yellow, line)
 
@@ -163,15 +173,21 @@ def main():
     off_road = cv2.distanceTransform((labels != ROAD).astype(np.uint8), cv2.DIST_L2, 3)
     labels[(labels == WHITE) & (off_road > 3)] = FLOOR
 
+    # The stop line went with the icons; it covers the road between the lines.
+    stop = labels[STOP_LINE_Y[0] - y0:STOP_LINE_Y[1] - y0 + 1,
+                  STOP_LINE_X[0] - x0:STOP_LINE_X[1] - x0 + 1]
+    stop[stop == ROAD] = STOP
+
     # Smooth upsampling: blur each class indicator and take the strongest.
     scores = []
-    for k in range(4):
+    for k in range(len(COLOURS)):
         indicator = (labels == k).astype(np.float32)
         up = cv2.resize(indicator, (SIZE, SIZE), interpolation=cv2.INTER_LINEAR)
         scores.append(cv2.GaussianBlur(up, (0, 0), 2.0))
     # Lines are one or two map pixels wide; favour them so they survive.
     scores[YELLOW] *= 1.35
     scores[WHITE] *= 1.35
+    scores[STOP] *= 1.35
     classes = np.argmax(np.stack(scores), axis=0)
 
     texture = np.zeros((SIZE, SIZE, 3), np.uint8)

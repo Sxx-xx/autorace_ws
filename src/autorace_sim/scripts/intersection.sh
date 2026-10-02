@@ -1,9 +1,11 @@
 #!/bin/bash
-# Show the left or right direction sign at the intersection: intersection.sh left|right
+# Show the left or right direction sign at the intersection, or one picked at
+# random as on race day: intersection.sh left|right|random
 # The other one goes back below the floor.
 set -e
-SHOW=${1:?usage: intersection.sh left|right}
-case $SHOW in left) HIDE=right ;; right) HIDE=left ;; *) echo "left or right" >&2; exit 1 ;; esac
+SHOW=${1:?usage: intersection.sh left|right|random}
+if [ "$SHOW" = random ]; then SHOW=$([ $((RANDOM % 2)) = 0 ] && echo left || echo right); fi
+case $SHOW in left) HIDE=right ;; right) HIDE=left ;; *) echo "left, right or random" >&2; exit 1 ;; esac
 PARAMS=$(ros2 pkg prefix --share autorace_sim)/params/course.yaml
 read X Y YAW < <(python3 -c "
 import yaml; s = yaml.safe_load(open('$PARAMS'))['course']['intersection_sign']
