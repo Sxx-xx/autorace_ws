@@ -1,0 +1,41 @@
+---
+# Mission tuning for the simulated AutoRace course.
+mission_manager:
+  ros__parameters:
+    # Only the missions that have a node behind them. A mission nobody answers
+    # for holds the state machine until it times out.
+    enabled_missions: ['intersection', 'construction', 'parking', 'level_crossing']
+    mission_timeout:
+      # From the warning sign round the longer branch at bend speed.
+      intersection: 120.0
+      # From the sign: up the lane, in and out of a bay, and back to the road.
+      parking: 90.0
+
+traffic_light_mission:
+  ros__parameters:
+    stop_distance: 0.12
+
+intersection_mission:
+  ros__parameters:
+    sign_streak: 3
+    branch_distance: 2.0
+
+construction_mission:
+  ros__parameters:
+    speed: 0.10
+    lookahead: 0.11
+    robot_radius: 0.095
+    comfort_clearance: 0.20
+    line_slack: 0.01
+
+parking_mission:
+  ros__parameters:
+    bay_station: 0.24
+    bay_depth: 0.29
+    speed: 0.08
+    park_time: 1.0
+
+level_crossing_mission:
+  ros__parameters:
+    # Front of the robot to the bar while waiting; sensor 2 is at 0.06.
+    stop_gap: 0.10
