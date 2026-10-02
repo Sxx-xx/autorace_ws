@@ -350,6 +350,9 @@
         <topic>camera/image_raw</topic>
         <gz_frame_id>camera_rgb_frame</gz_frame_id>
         <camera name="picam">
+          <!-- All but the flag of the markers that are only for people to
+               see (scripts/gen_course_world.py). -->
+          <visibility_mask>268435453</visibility_mask>
           <camera_info_topic>camera/camera_info</camera_info_topic>
           <horizontal_fov>1.085595</horizontal_fov>
           <image>
@@ -399,6 +402,9 @@
         <topic>camera_lane/image_raw</topic>
         <gz_frame_id>camera_lane_frame</gz_frame_id>
         <camera name="lanecam">
+          <!-- All but the flag of the markers that are only for people to
+               see (scripts/gen_course_world.py). -->
+          <visibility_mask>268435453</visibility_mask>
           <camera_info_topic>camera_lane/camera_info</camera_info_topic>
           <horizontal_fov>1.085595</horizontal_fov>
           <image>

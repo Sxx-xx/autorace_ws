@@ -16,3 +16,7 @@ sim_level_crossing:
     sensor1_y: -1.084
     sensor2_x: -1.249
     sensor2_y: -0.694
+    bar_x: -1.249
+    bar_y: -0.634
+    sensor1_distance_min: 0.3
+    sensor1_distance_max: 0.85
