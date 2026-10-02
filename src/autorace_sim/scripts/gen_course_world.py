@@ -86,6 +86,13 @@ BAR_ORIGIN = (HINGE_X - 0.16, HINGE_Y)  # hinge is 0.16 m behind the origin
 LANE_AT_BAR_X = world(0, 304)[0]
 SENSOR2 = (LANE_AT_BAR_X, round(HINGE_Y - 0.06, 3))  # 6 cm before the bar
 SENSOR1 = (LANE_AT_BAR_X, round(HINGE_Y - 0.45, 3))
+# Sensor 1 may stand anywhere on the approach: between this near and this far
+# from the bar, along the straight the robot comes up.
+SENSOR1_DISTANCE = (0.30, 0.85)
+# The sensors are shown as discs on the floor. Only the Gazebo window draws
+# them: the robot's cameras leave out visuals with this flag (see the
+# visibility_mask of the cameras in models/autorace_burger).
+MARKER_FLAG = 2
 
 # Signs face local +-y. yaw 0 faces a robot travelling along Y, pi/2 one
 # travelling along X.
@@ -138,6 +145,28 @@ def cylinder_model(name, xy, radius, length, colour):
           <material>
             <ambient>{colour} {colour} {colour} 1</ambient>
             <diffuse>{colour} {colour} {colour} 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>'''
+
+
+def marker_model(name, xy, radius, rgb):
+    """A disc on the floor that marks a spot for whoever is watching."""
+    x, y = xy
+    r, g, b = rgb
+    return f'''    <model name="{name}">
+      <static>true</static>
+      <pose>{pose(x, y, 0.011)}</pose>
+      <link name="link">
+        <visual name="visual">
+          <visibility_flags>{MARKER_FLAG}</visibility_flags>
+          <cast_shadows>false</cast_shadows>
+          <geometry><cylinder><radius>{radius}</radius><length>0.002</length></cylinder></geometry>
+          <material>
+            <ambient>{r} {g} {b} 1</ambient>
+            <diffuse>{r} {g} {b} 1</diffuse>
+            <emissive>{r} {g} {b} 1</emissive>
           </material>
         </visual>
       </link>
@@ -270,6 +299,9 @@ def world_file():
         parts.append(box_model(f'construction_{i + 1}', xy,
                                (sx, sy, CONSTRUCTION_HEIGHT), 0.55))
     parts.append(box_model('house_robot', PARKING_BAYS[HOUSE_BAY], HOUSE_SIZE, 0.2))
+    # Sensor 1 green, sensor 2 red; sim_level_crossing moves the first one.
+    parts.append(marker_model('crossing_sensor_1', SENSOR1, 0.04, (0.0, 0.9, 0.2)))
+    parts.append(marker_model('crossing_sensor_2', SENSOR2, 0.03, (1.0, 0.1, 0.1)))
     parts.append(tunnel())
     body = '\n\n'.join(parts)
 
@@ -372,6 +404,10 @@ sim_level_crossing:
     sensor1_y: {SENSOR1[1]}
     sensor2_x: {SENSOR2[0]}
     sensor2_y: {SENSOR2[1]}
+    bar_x: {LANE_AT_BAR_X}
+    bar_y: {HINGE_Y}
+    sensor1_distance_min: {SENSOR1_DISTANCE[0]}
+    sensor1_distance_max: {SENSOR1_DISTANCE[1]}
 ''')
     print('wrote', path)
 

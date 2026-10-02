@@ -20,9 +20,16 @@ The rules put sensor 1 somewhere on the approach: when the robot passes it the
 bar comes down, and it opens again after a while.  Sensor 2 sits 6 cm in front
 of the bar and failing the mission means touching it while the bar is down, so
 the node reports crossing it on `/sim/level_crossing_violation` for scoring.
+
+Where sensor 1 stands is not known beforehand, so it is put somewhere new on
+the approach for every lap, unless `sensor1_distance` (or a message on
+`/sim/level_crossing/sensor1_distance`) says how far before the bar. Both
+sensors are marked on the floor for whoever is watching the simulation; the
+robot's cameras do not see the marks.
 """
 
 import math
+import random
 
 from nav_msgs.msg import Odometry
 import rclpy
@@ -30,6 +37,14 @@ from rclpy.node import Node
 from std_msgs.msg import Bool
 from std_msgs.msg import Float64
 from std_msgs.msg import String
+
+try:
+    from gz.msgs10.boolean_pb2 import Boolean
+    from gz.msgs10.pose_pb2 import Pose
+    from gz.msgs10.pose_v_pb2 import Pose_V
+    from gz.transport13 import Node as GzNode
+except ImportError:
+    GzNode = None
 
 
 ANGLE_CLOSED = 0.0
@@ -41,10 +56,15 @@ class SimLevelCrossing(Node):
     def __init__(self):
         super().__init__('sim_level_crossing')
 
-        # Odometry starts at the spawn pose, so the offset turns it into world
-        # coordinates without needing ground truth from the simulator.
+        # The sensors stand on the course, so it is the robot's true position
+        # they see: the simulator's own, read straight from Gazebo. Without
+        # the Gazebo Python bindings odometry is used instead: it starts at
+        # the spawn pose, so the offset turns it into world coordinates, as
+        # long as the robot has not been moved by hand.
         # The positions come from params/course.yaml, which is generated
         # together with the world file.
+        self.declare_parameter('robot_name', 'autorace_burger')
+        self.declare_parameter('world_name', 'autorace')
         self.declare_parameter('start_x', 0.0)
         self.declare_parameter('start_y', 0.0)
         self.declare_parameter('start_yaw', 0.0)
@@ -53,12 +73,24 @@ class SimLevelCrossing(Node):
         self.declare_parameter('sensor1_x', 0.0)
         self.declare_parameter('sensor1_y', 0.0)
         self.declare_parameter('sensor1_radius', 0.20)
+        # How far before the bar sensor 1 stands, along the line from the
+        # bar back through sensor 2. Zero puts it somewhere between the
+        # minimum and the maximum, anew for every lap.
+        self.declare_parameter('sensor1_distance', 0.0)
+        self.declare_parameter('sensor1_distance_min', 0.30)
+        self.declare_parameter('sensor1_distance_max', 0.85)
+        self.declare_parameter('bar_x', 0.0)
+        self.declare_parameter('bar_y', 0.0)
         # Sensor 2: 6 cm in front of the bar, per the rules.
         self.declare_parameter('sensor2_x', 0.0)
         self.declare_parameter('sensor2_y', 0.0)
         self.declare_parameter('sensor2_radius', 0.08)
         self.declare_parameter('closed_duration', 10.0)
+        # Sensor 1 closes the bar once, and again only after the robot has
+        # been this far away from it.
+        self.declare_parameter('rearm_distance', 1.5)
 
+        self.robot_name = self.get_parameter('robot_name').value
         self.start_x = self.get_parameter('start_x').value
         self.start_y = self.get_parameter('start_y').value
         self.start_yaw = self.get_parameter('start_yaw').value
@@ -67,8 +99,13 @@ class SimLevelCrossing(Node):
             self.get_parameter('sensor1_y').value,
         )
         self.sensor1_radius = self.get_parameter('sensor1_radius').value
+        self.sensor1_distance = self.get_parameter('sensor1_distance').value
+        self.sensor1_range = (self.get_parameter('sensor1_distance_min').value,
+                              self.get_parameter('sensor1_distance_max').value)
+        self.bar = (self.get_parameter('bar_x').value, self.get_parameter('bar_y').value)
         self.sensor2_radius = self.get_parameter('sensor2_radius').value
         self.closed_duration = self.get_parameter('closed_duration').value
+        self.rearm_distance = self.get_parameter('rearm_distance').value
         self.sensor2 = (
             self.get_parameter('sensor2_x').value,
             self.get_parameter('sensor2_y').value,
@@ -79,6 +116,18 @@ class SimLevelCrossing(Node):
         self.pub_violation = self.create_publisher(Bool, '/sim/level_crossing_violation', 1)
 
         self.create_subscription(Odometry, '/odom', self.callback_odom, 1)
+        self.create_subscription(
+            Float64, '/sim/level_crossing/sensor1_distance', self.callback_distance, 1)
+        self.truth_seen = False
+        if GzNode is not None:
+            world = self.get_parameter('world_name').value
+            self.gz_node = GzNode()
+            self.gz_node.subscribe(
+                Pose_V, f'/world/{world}/dynamic_pose/info', self.callback_truth)
+        else:
+            self.gz_node = None
+            self.get_logger().warn('No Gazebo bindings, locating the robot by odometry.')
+        self.world = self.get_parameter('world_name').value
 
         self.state = 'open'
         self.closed_at = None
@@ -86,12 +135,59 @@ class SimLevelCrossing(Node):
         self.violation = False
         self.position = None
 
+        self.mark_placed = True
+        self.place_sensor1()
         self.create_timer(0.1, self.update)
 
     def now(self):
         return self.get_clock().now().nanoseconds / 1e9
 
+    def callback_distance(self, msg):
+        """Put sensor 1 this far before the bar; zero for anywhere."""
+        self.sensor1_distance = msg.data
+        self.triggered = False
+        self.violation = False
+        self.place_sensor1()
+
+    def place_sensor1(self):
+        """Stand sensor 1 on the approach and move its mark there."""
+        to_sensor2 = (self.sensor2[0] - self.bar[0], self.sensor2[1] - self.bar[1])
+        length = math.hypot(*to_sensor2)
+        if length < 1e-6:
+            # No bar position given: sensor 1 stays where the parameters put it.
+            return
+        distance = self.sensor1_distance
+        if distance <= 0.0:
+            distance = random.uniform(*self.sensor1_range)
+        self.sensor1 = (self.bar[0] + to_sensor2[0] / length * distance,
+                        self.bar[1] + to_sensor2[1] / length * distance)
+        self.get_logger().info(f'Sensor 1 is {distance:.2f} m before the bar.')
+        self.mark_placed = False
+        self.move_mark()
+
+    def move_mark(self):
+        """Move the mark of sensor 1 to where the sensor is; retried until done."""
+        if self.gz_node is None:
+            self.mark_placed = True
+            return
+        mark = Pose()
+        mark.name = 'crossing_sensor_1'
+        mark.position.x, mark.position.y, mark.position.z = *self.sensor1, 0.011
+        mark.orientation.w = 1.0
+        done, reply = self.gz_node.request(
+            f'/world/{self.world}/set_pose', mark, Pose, Boolean, 500)
+        self.mark_placed = bool(done and reply.data)
+
+    def callback_truth(self, msg):
+        for pose in msg.pose:
+            if pose.name == self.robot_name:
+                self.truth_seen = True
+                self.position = (pose.position.x, pose.position.y)
+                return
+
     def callback_odom(self, msg):
+        if self.truth_seen:
+            return
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
         cos_yaw = math.cos(self.start_yaw)
@@ -112,8 +208,15 @@ class SimLevelCrossing(Node):
         self.pub_bar.publish(Float64(data=angle))
 
     def update(self):
+        if not self.mark_placed:
+            self.move_mark()
         if self.state == 'open':
             self.set_bar(ANGLE_OPEN)
+            if self.triggered and not self.near(self.sensor1, self.rearm_distance):
+                # The robot has left; the crossing is ready for the next lap.
+                self.triggered = False
+                self.violation = False
+                self.place_sensor1()
             if not self.triggered and self.near(self.sensor1, self.sensor1_radius):
                 self.get_logger().info('Sensor 1 triggered, closing the bar.')
                 self.triggered = True

@@ -200,6 +200,40 @@
       </link>
     </model>
 
+    <model name="crossing_sensor_1">
+      <static>true</static>
+      <pose>-1.249 -1.084 0.011 0 0 0.0000</pose>
+      <link name="link">
+        <visual name="visual">
+          <visibility_flags>2</visibility_flags>
+          <cast_shadows>false</cast_shadows>
+          <geometry><cylinder><radius>0.04</radius><length>0.002</length></cylinder></geometry>
+          <material>
+            <ambient>0.0 0.9 0.2 1</ambient>
+            <diffuse>0.0 0.9 0.2 1</diffuse>
+            <emissive>0.0 0.9 0.2 1</emissive>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="crossing_sensor_2">
+      <static>true</static>
+      <pose>-1.249 -0.694 0.011 0 0 0.0000</pose>
+      <link name="link">
+        <visual name="visual">
+          <visibility_flags>2</visibility_flags>
+          <cast_shadows>false</cast_shadows>
+          <geometry><cylinder><radius>0.03</radius><length>0.002</length></cylinder></geometry>
+          <material>
+            <ambient>1.0 0.1 0.1 1</ambient>
+            <diffuse>1.0 0.1 0.1 1</diffuse>
+            <emissive>1.0 0.1 0.1 1</emissive>
+          </material>
+        </visual>
+      </link>
+    </model>
+
     <model name="tunnel_wall_y0_a">
       <static>true</static>
       <pose>0.825 -0.070 0.120 0 0 0.0000</pose>
