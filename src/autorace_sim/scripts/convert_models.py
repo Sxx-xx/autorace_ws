@@ -89,6 +89,9 @@ def convert(old: str, new: str) -> None:
     sdf = MATERIAL_RE.sub(pbr_material(new, texture), sdf)
     # Classic plugins do not exist in gz-sim.
     sdf = re.sub(r'<plugin[^>]*>\s*</plugin>', '', sdf)
+    # Some signs carry their position in the 2020 course as a link offset;
+    # the world file is what places them.
+    sdf = re.sub(r'(<link name="box">\s*<pose>)[^<]*(</pose>)', r'\g<1>0 0 0 0 0 0\2', sdf)
     if '<static>' not in sdf:
         sdf = sdf.replace('</model>', '    <static>true</static>\n  </model>')
 
