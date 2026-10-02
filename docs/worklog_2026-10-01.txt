@@ -1,0 +1,190 @@
+AutoRace 시뮬레이션 작업 정리 (2026-10-01 ~ 10-02)
+==================================================
+
+모든 변경은 아직 커밋하지 않았다 (마지막 커밋: 3babd64).
+
+
+1. 갈림길 이정표 위치와 섬 차선 수정
+--------------------------------------
+- 이정표(좌회전 표지판)가 섬 위가 아니라 출발선 근처 공중에 떠 있었다.
+  원인: autorace_sign_left/model.sdf 안에 예전 2020 코스의 링크 오프셋
+  (1.08, -0.838, 0.125)이 남아 있었음 → 0으로 수정. 이제 섬 위 (0.796, 1.003)에 선다.
+- 섬 테두리 색이 map.png와 달랐다. map.png는 위쪽 절반 흰색 / 아래쪽 절반 노란색인데
+  텍스처는 왼쪽 흰색 / 오른쪽 노란색으로 그려져 있었음 → gen_course_texture.py 수정.
+  이렇게 해야 위쪽 길(좌회전)은 섬의 흰선이 오른쪽, 아래쪽 길(우회전)은 섬의 노란선이
+  왼쪽에 와서 두 길 모두 "노란선 왼쪽 / 흰선 오른쪽"이 된다.
+- scripts/intersection.sh 에 random 추가 (left|right|random).
+
+
+2. 차선 추종 재작성 (선을 물고 가던 문제)
+-------------------------------------------
+측정 방법: 바닥 텍스처에서 로봇 중심과 각 선 사이 거리를 계산. 출발선 → 공사 구간 입구.
+
+  수정 전 (차선 주행만)   평균 2.6 cm, 최대 11.6 cm, 선 위에 걸친 시간 36 %
+  수정 후 차선 주행만     평균 0.9 cm, 최대 2.9 cm, 4 %
+  수정 후 우회전 이정표   평균 0.9 cm, 최대 2.9 cm, 3 %
+  수정 후 좌회전 이정표   평균 0.9 cm, 최대 3.6 cm, 2 %
+  공사 구간까지 걸린 시간 약 100 초 → 50~65 초
+
+차선 폭 (텍스처 실측): 두 선 사이 20.6~23.2 cm, 선 중심 간격 약 25~26 cm,
+양쪽 선 포함 약 29~30 cm. 로봇 폭 17.8 cm라 한쪽 여유가 1.4~2.7 cm뿐이다.
+공사 구간은 두 선 사이 47.8 cm.
+
+원인
+- 조향 기준점이 0.25 m 앞이고 게인이 낮아서(PD, kp 2.6) 커브에 미리 들어가고
+  커브를 나온 뒤 중심으로 돌아오는 데 0.5 m 이상 걸렸다.
+- 한쪽 선만 보일 때 반 차선을 화면 가로 방향으로만 밀었다. 선이 45°로 지나가면
+  실제 거리는 8.8 cm → 선을 밟는다.
+- 차선 카메라 시야가 좁다 (가까운 쪽 ±12 cm). 급커브 안쪽 선은 화면에 아예 안 들어오고
+  바깥쪽 선은 로봇 앞을 가로지르는데, 세로 방향 2차 곡선 x(y)로는 표현할 수 없다.
+
+수정 (detect_lane.py, lane_controller.py)
+- 곡선 맞춤(슬라이딩 윈도우, 2차 곡선)을 없앴다. 대신 로봇 앞 0.16 m 원호 위에서
+  "노란선과 흰선에서 같은 거리인 점", 한쪽 선만 있으면 "그 선에서 반 차선 떨어진 점"을
+  거리 변환으로 찾는다. 선이 어느 방향으로 누워 있어도 수직 거리가 유지된다.
+  노란선은 진행 방향 왼쪽, 흰선은 오른쪽에 있어야 그 선을 인정한다.
+- 선 기억: 최근 0.4 m 구간에서 본 선을 오도메트리(/odom)로 옮겨 현재 화면 옆에 붙인다.
+  화면 밖으로 나간 안쪽 선도 차선 경계로 쓸 수 있다. 사진 시각의 오도메트리를 써야
+  커브에서 선이 번지지 않는다.
+- 두 선 간격이 차선 폭의 1.4배를 넘으면 한 차선이 아니다(갈림길). 원호 위에 차선 중심이
+  두 군데 생기면 lane.fork_side(기본 right) 쪽, 또는 /detect/lane_follow (left|right)가
+  지시한 쪽을 택한다.
+- 제어기는 pure pursuit. /detect/lane_target (로봇 기준 앞/왼쪽, m)을 지나는 원호를 따라간다.
+  회전 속도가 cornering_rate(0.6 rad/s)를 넘게 되면 속도를 줄인다.
+- 흰선 마스크에서 화면 가장자리에 생기던 가는 가짜 선 제거 (기억에 쌓이면 번진다).
+- 파라미터: control_lookahead 0.25 → 0.16, kp/kd/slowdown_offset 삭제,
+  pursuit_gain / cornering_rate 추가. reliability.max_missing_fraction, threshold 삭제.
+
+
+3. 갈림길 미션
+---------------
+파일: autorace_perception/detect_sign.py, autorace_core/intersection_mission.py,
+      autorace_bringup/launch/race.launch.py, param/mission_sim.yaml
+
+- detect_sign: 전방 카메라에서 색과 모양으로 표지판 인식. /autorace/sign 발행.
+    갈림길 경고 (빨간 테두리 노란 삼각형 + 검은 T) → "intersection"
+    좌/우 이정표 (파란 원판 + 꺾인 화살표) → "left" / "right"
+      화살표 머리(원판 위쪽 절반)가 줄기(아래쪽 절반)의 어느 쪽에 있는지로 방향 판정.
+    화면 가장자리에 잘린 표지판은 읽지 않는다. 공사/터널 삼각형, 주차, 정지 표지판은
+    무시되는 것을 텍스처로 확인.
+- 일반 차선 주행으로는 전방 카메라가 섬 위 이정표를 정면으로 보지 못한다
+  (화면 왼쪽 끝에 잠깐 걸림). 그래서 미션 순서는:
+    T 표지판 인식 → 미션 시작 → 왼쪽 길 쪽으로 붙어 가며 섬을 바라봄
+    → 이정표 읽음 → 그 방향 길로 2 m 주행 → 미션 종료
+- mission_manager: left/right 표지판도 intersection 미션을 시작시키도록 추가.
+  enabled_missions 는 노드가 있는 미션만 (지금은 intersection).
+- lane_controller: 차선을 잃었을 때 /detect/lane_follow 가 있으면 그쪽으로 탐색 회전.
+- 결과: 좌/우 모두 이정표를 읽고 맞는 길로 주행 (위 표의 수치).
+
+
+4. 신호등 미션
+---------------
+파일: autorace_perception/detect_traffic_light.py, detect_stop_line.py,
+      autorace_core/traffic_light_mission.py
+
+- map.png의 빨간 정지선이 시뮬 바닥에 없었다. 텍스처를 만들 때 아이콘으로 취급되어
+  지워졌음 → gen_course_texture.py 에서 복원. 위치: Y 0.868~0.918, 차선 전체 폭.
+  출발 위치는 정지선 약 17 cm 뒤.
+- detect_traffic_light: 전방 카메라. 밝고 채도 높은 빨강/노랑/초록 + 둥근 모양 +
+  좌우가 어두움(신호등 몸체). /detect/traffic_light (0 없음, 1 적, 2 황, 3 녹).
+  노란 차선과 표지판 빨간 테두리에는 반응하지 않는 것을 확인.
+- detect_stop_line: 차선 카메라 BEV에서 가로로 10 cm 이상인 빨간 띠.
+  /detect/stop_line (바퀴 축에서 선 가까운 가장자리까지 거리, m).
+- traffic_light_mission: 출발 전(run_active 아님)에는 정지선까지만 간다.
+  선이 0.12 m 앞에 오면 /cmd_vel/mission 으로 로봇을 붙잡는다.
+    - 선과의 거리를 0.12 m로 유지 (정지 명령만 주면 시뮬에서 초당 2~3 mm씩 밀린다).
+    - 차선 방향을 바라보도록 제자리 회전. 비스듬히 서면 신호등이 화면 밖으로 나가
+      초록불을 못 본다 (실제로 12초를 기다린 경우가 있었음).
+  mission_manager 가 초록불을 5프레임 연속 보면 주행 시작 → 붙잡기 해제.
+  로봇이 선에 닿기 전에 초록불이면 멈추지 않고 통과한다.
+- race.launch.py 의 auto_start 기본값을 false 로 변경 (true 면 신호등 무시하고 바로 출발).
+- mission_manager, cmd_vel_mux: 시뮬 시간이 0인 채로 노드가 뜨면 대기 제한 시간(90 초)이
+  이미 지난 것으로 계산되던 문제 수정.
+
+확인한 것
+- 빨간불에 출발: 정지선 앞에서 멈춤 (바퀴 축이 선 11 cm 전, 로봇 앞면이 약 4 cm 전),
+  노란불 동안 계속 대기, 초록불에 출발.
+- 초록불에 출발: 멈추지 않고 통과.
+- 새로 스폰한 로봇(순간이동 없이), 16° 비스듬히 놓은 로봇: 둘 다 정상.
+
+확인하지 못한 것
+- 정지선에서 방향 맞추기를 넣은 뒤로 신호등 출발 + 좌/우 이정표 전체 주행은 다시
+  측정하지 않았다. 그 직전 측정은 우회전 평균 0.9 cm / 3 %, 좌회전은 공사 구간까지
+  도달했지만 출발 때 로봇이 비스듬히 흔들리며 시작해 정지선에서 12초 대기했다.
+
+
+5. 공사 구간 준비 (조사만)
+----------------------------
+라이다: 바닥에서 약 0.18 m, 360점(1°), 5 Hz, 노이즈 σ 1 cm, 최소 0.12 m.
+장애물: 0.09 x 0.234~0.246 m, 높이 0.20 m. (-0.537, 1.497), (-1.003, 1.746), (-1.469, 1.497).
+
+장애물보다 폭이 작은 물체 (라이다 높이에 걸리는 것)
+  표지판 5개        0.12 x 0.025 m   갈림길 (1.007, 1.929), 이정표 (0.796, 1.003),
+                                     공사 (-0.010, 1.353), 주차 (-1.961, 0.831), 터널 (-0.050, -1.500)
+  신호등 몸체       0.09 x 0.03 m    (1.961, 1.372)
+  차단바 기둥       0.03 x 0.03 m    (-1.055, -0.634)
+  하우스 로봇       0.14 x 0.18 m    (-0.751, 0.751)
+  터널 원기둥       지름 0.16 m      (0.600, -1.300)
+  터널 상자         0.20 x 0.15 m    (1.000, -0.700)
+폭이 비슷하거나 큰 것: 터널 상자 0.12 x 0.30 m, 차단바 0.30 x 0.02 m (내려왔을 때), 터널 벽.
+경기장 외곽 벽은 없다.
+- 장애물 윗면(0.20 m)과 하우스 로봇 윗면(0.19 m)은 스캔 높이보다 1~2 cm만 높다.
+  로봇이 앞뒤로 흔들리면 빔이 위로 넘어갈 수 있다.
+- 장애물 옆으로 남는 폭은 약 24 cm (배치 좌표로 계산, 시뮬에서 직접 재지는 않음).
+
+
+6. 알려진 문제 / 다음 할 일
+----------------------------
+- 공사 구간 회피 미션 (라이다 기반) - 아직 없음. 차선 추종만으로는 장애물에 걸린다.
+- 시뮬-ROS 브리지(parameter_bridge)가 두 번 멈췄다. /clock, camera_info, odom 이 끊기고
+  "Waiting for camera_info" 만 반복된다. 노드를 여러 번 띄우고 내리는 중에 생겼고
+  원인은 확인하지 못했다. 시뮬을 완전히 내렸다가 다시 띄우면 정상.
+- 주행 직후 로봇을 출발선으로 순간이동하면 앞으로 기울어 흔들리는 경우가 있다
+  (피치 0.1~0.3 rad). 그 상태로 출발하면 차선 인식이 깨진다. 새로 스폰하면 생기지 않는다.
+- 정지 명령 상태에서도 시뮬 로봇이 초당 2~3 mm 밀리는 경우가 있다.
+- 차선 여유가 한쪽 1.4~2.7 cm라 최대 오차 지점(약 3 cm)에서는 여전히 선에 닿는다.
+- 미션 없이 차선 주행만 하면 갈림길에서 항상 오른쪽으로 간다 (lane.fork_side).
+- mux 후진 탈출, 터널, 주차, 차단바 미션은 그대로 (9/30 일지 참고).
+- docs/SIM_NOTES.md 는 이전 코스 / Waffle Pi / 이전 차선 검출 기준이라 갱신 필요.
+
+
+7. 실행 방법
+-------------
+  cd ~/Desktop/autorace_ws
+  colcon build --symlink-install
+  source install/setup.bash
+  ros2 launch autorace_sim autorace_world.launch.py          # 시뮬 (gui:=false 로 창 없이)
+  ros2 launch autorace_bringup race.launch.py                # 신호등 대기 → 차선 주행 + 미션
+  ros2 launch autorace_bringup race.launch.py auto_start:=true   # 신호등 건너뛰기
+  ros2 launch autorace_bringup lane_drive.launch.py          # 차선 주행만
+
+  이정표 바꾸기:  bash src/autorace_sim/scripts/intersection.sh left|right|random
+  디버그 영상:    /detect/image_lane (선 지도와 목표점), /detect/image_sign,
+                  /detect/image_traffic_light
+
+  시뮬 종료 후 gz 서버가 남으면:
+  pkill -f 'gz[ ]sim'; pkill -f 'ruby.*gz[ ]sim'
+
+
+8. 변경 파일
+-------------
+수정
+  src/autorace_perception/autorace_perception/detect_lane.py   (기하 부분 재작성)
+  src/autorace_core/autorace_core/lane_controller.py           (pure pursuit)
+  src/autorace_core/autorace_core/mission_manager.py
+  src/autorace_core/autorace_core/cmd_vel_mux.py
+  src/autorace_bringup/param/perception_sim.yaml
+  src/autorace_core/setup.py, src/autorace_perception/setup.py, package.xml
+  src/autorace_sim/models/autorace_sign_left/model.sdf
+  src/autorace_sim/models/autorace_course_map/materials/textures/course_map.png
+  src/autorace_sim/scripts/gen_course_texture.py, convert_models.py, intersection.sh
+추가
+  src/autorace_perception/autorace_perception/detect_sign.py
+  src/autorace_perception/autorace_perception/detect_traffic_light.py
+  src/autorace_perception/autorace_perception/detect_stop_line.py
+  src/autorace_core/autorace_core/intersection_mission.py
+  src/autorace_core/autorace_core/traffic_light_mission.py
+  src/autorace_bringup/launch/race.launch.py
+  src/autorace_bringup/param/mission_sim.yaml
+
+측정 기록: log/lap_test/lane/ (궤적 traj.txt, 실행 로그 run.log)
