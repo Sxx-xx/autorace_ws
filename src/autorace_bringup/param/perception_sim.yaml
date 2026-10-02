@@ -30,7 +30,9 @@ detect_lane:
       near: 0.07
     lane:
       width_m: 0.25         # measured between the line centres on the course
-      control_lookahead: 0.25   # further out, the robot turns before the bend
+      # Further out, the robot starts turning before it reaches the bend and
+      # cuts the corner; with 2 cm to spare either side there is no room to.
+      control_lookahead: 0.16
     detect:
       min_pixels: 2000
       max_line_width_m: 0.08
@@ -51,25 +53,23 @@ detect_lane:
           lightness_l: 95
           lightness_h: 255
     reliability:
-      # A line may be missing from up to this fraction of the rows and still
-      # count; the original demanded all but 100 of 600 rows, which no line
-      # manages in a bend. The inner line of a tight bend (the yellow one in a
-      # left turn) only crosses the bottom quarter of the view, so this has to
-      # allow for that or the robot ignores a line it can plainly see.
-      max_missing_fraction: 0.8
       step: 5
-      threshold: 50
     process_every_n: 2
     hold_last_center_sec: 0.4
+
+detect_stop_line:
+  ros__parameters:
+    bev:
+      pixels_per_meter: 1200.0
+      near: 0.07
 
 lane_controller:
   ros__parameters:
     max_speed: 0.16
     min_speed: 0.05
-    kp: 2.6
-    kd: 6.0
+    pursuit_gain: 1.0
     max_angular: 2.0
-    slowdown_offset: 0.12
+    cornering_rate: 0.6
     lane_timeout: 0.5
     recovery_speed: 0.05
     recovery_angular: 0.45

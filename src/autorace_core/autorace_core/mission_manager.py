@@ -35,7 +35,7 @@ from std_msgs.msg import String
 from std_msgs.msg import UInt8
 
 
-# Traffic light decision published by autorace_perception/traffic_light_decision.
+# Traffic light colour published by autorace_perception/detect_traffic_light.
 LIGHT_NONE = 0
 LIGHT_RED = 1
 LIGHT_YELLOW = 2
@@ -54,6 +54,10 @@ MISSIONS = {
 # Sign name (from the aggregator) -> mission it triggers.
 SIGN_TO_MISSION = {
     'intersection': 'intersection',
+    # The direction signs stand at the fork itself; seeing one without having
+    # seen the warning sign before it still means the fork is here.
+    'left': 'intersection',
+    'right': 'intersection',
     'construction': 'construction',
     'parking': 'parking',
     'stop': 'level_crossing',
@@ -217,6 +221,10 @@ class MissionManager(Node):
 
     def update(self):
         now = self.now()
+        if self.state_start == 0.0:
+            # Simulated time had not started when the node came up; counting
+            # from zero would put the standby timeout in the past already.
+            self.state_start = now
         state_elapsed = now - self.state_start
 
         if self.state == MissionState.STANDBY and state_elapsed > self.standby_timeout:

@@ -20,30 +20,56 @@
 
 """Lane detection on the metric bird's eye view.
 
-Same approach as the ROBOTIS original -- HSV masks for the white and yellow
-line, a sliding window to seed a second order fit, then a fit around the
-previous curve -- but everything the original hard coded for one particular
-bird's eye calibration is a parameter here:
+The lines are found by colour, as in the ROBOTIS original: HSV masks for the
+white and the yellow line. What is done with them is different. The original
+fits a curve x(y) to each line and takes the lane centre half a lane sideways
+from it, which holds on a gentle bend seen from far off. On the AutoRace
+course the bends are as tight as the lane is wide and the camera looks at the
+30 cm in front of the robot: the inner line of a bend is out of the picture
+altogether and the outer one runs across it, where no x(y) curve can follow
+it and "sideways" is no longer square to the line.
 
-* half a lane is `lane.width_m / 2 * bev.pixels_per_meter` pixels instead of a
-  fixed 280, so the projection can cover more road; the wide view is what keeps
-  a line inside the frame through the tight bends of the AutoRace course,
-* the control point is a lookahead distance in metres rather than row 350,
-* a line stays trustworthy while it covers enough rows, and how much is
-  "enough" is tunable instead of being 500 of 600 rows.
+So the lane centre is taken from distances instead. The point to steer for
+lies on an arc `lane.control_lookahead` ahead of the axle, and it is the point
+of that arc which is
 
-It also fixes two things that stop the robot on the course: the original
-publishes no centre at all when a single frame drops both lines, and it can
-reference an unset curve on the first frames.
+* as far from the yellow line as from the white one, when both bound the lane
+  there, or
+* half a lane from the one line there is,
+
+with the yellow line on the left of the way there and the white line on the
+right. Distance to a line is the same whichever way the line runs, so the
+robot keeps its place in the lane round a bend as on a straight.
+
+The camera sees a strip barely wider than the lane, and in a tight bend the
+inner line is outside it the whole way round. The lines are therefore
+remembered: what was seen over the last stretch of road is carried along with
+the odometry and laid next to what is seen now, so a line that has slid out
+of the picture still bounds the lane.
+
+Where the road forks there are two lane centres on the arc. The one on the
+`lane.fork_side` is taken, or the one /detect/lane_follow asks for.
+
+The lines seen in each picture are also published as points, in metres from
+the axle (/detect/lane_lines/yellow and /white), for the missions that have to
+know where the road ends rather than where its middle is.
 """
+
+from collections import deque
 
 import cv2
 from cv_bridge import CvBridge
+from geometry_msgs.msg import PointStamped
+from nav_msgs.msg import Odometry
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Float64
+from std_msgs.msg import Header
+from std_msgs.msg import String
 from std_msgs.msg import UInt8
 
 
@@ -75,33 +101,54 @@ class DetectLane(Node):
         # Geometry of the bird's eye view this node is fed.
         self.declare_parameter('bev.pixels_per_meter', 1200.0)
         self.declare_parameter('bev.near', 0.24)
+        # Between the centres of the two lines, and how wide a line is.
+        # Distances are measured to the near edge of a line.
         self.declare_parameter('lane.width_m', 0.25)
-        self.declare_parameter('lane.control_lookahead', 0.45)
-        # A line counts towards the lane centre only if it was seen this close
-        # to the control point.
-        self.declare_parameter('lane.reach_tolerance_m', 0.05)
+        self.declare_parameter('lane.line_width_m', 0.03)
+        self.declare_parameter('lane.control_lookahead', 0.16)
+        # Two lines this much further apart than a lane are not one lane: the
+        # road is forking, or doubling in width, and each line has a lane
+        # centre of its own beside it.
+        self.declare_parameter('lane.max_width_ratio', 1.4)
+        # Which way to go where there are two, unless /detect/lane_follow
+        # says otherwise.
+        self.declare_parameter('lane.fork_side', 'right')
+        # A point of the arc this close to the middle counts as lane centre.
+        self.declare_parameter('lane.centre_tolerance', 0.025)
+        # Lines are remembered over this much road behind the robot.
+        self.declare_parameter('lane.memory_distance', 0.4)
+        # A line further than this from a point says nothing about the lane
+        # there.
+        self.declare_parameter('lane.max_line_distance', 0.30)
+        # How far to either side of straight ahead the target may lie.
+        self.declare_parameter('lane.max_target_angle', 1.1)
 
         self.declare_parameter('detect.min_pixels', 3000)
         self.declare_parameter('detect.max_line_width_m', 0.08)
         # How much brighter than its surroundings a white line must be; 0 turns
         # the check off.
         self.declare_parameter('detect.white_contrast_min', 20)
-        self.declare_parameter('detect.side_margin_m', 0.05)
         self.declare_parameter('detect.auto_threshold', True)
         self.declare_parameter('detect.auto_threshold_low', 5000)
         self.declare_parameter('detect.auto_threshold_high', 35000)
-        self.declare_parameter('reliability.max_missing_fraction', 0.45)
         self.declare_parameter('reliability.step', 5)
-        self.declare_parameter('reliability.threshold', 50)
         self.declare_parameter('process_every_n', 2)
         self.declare_parameter('hold_last_center_sec', 0.4)
+        # A request to follow one line only lapses when it stops being repeated.
+        self.declare_parameter('follow_timeout', 0.5)
         self.declare_parameter('publish_debug_image', True)
 
         self.ppm = self.get_parameter('bev.pixels_per_meter').value
         self.near = self.get_parameter('bev.near').value
-        self.lane_width_px = self.get_parameter('lane.width_m').value * self.ppm
+        self.lane_width = (self.get_parameter('lane.width_m').value
+                           - self.get_parameter('lane.line_width_m').value)
         self.lookahead = self.get_parameter('lane.control_lookahead').value
-        self.reach_tolerance_px = self.get_parameter('lane.reach_tolerance_m').value * self.ppm
+        self.max_width = self.get_parameter('lane.max_width_ratio').value * self.lane_width
+        self.fork_side = self.get_parameter('lane.fork_side').value
+        self.centre_tolerance = self.get_parameter('lane.centre_tolerance').value
+        self.memory_distance = self.get_parameter('lane.memory_distance').value
+        self.max_line_distance = self.get_parameter('lane.max_line_distance').value
+        self.max_target_angle = self.get_parameter('lane.max_target_angle').value
 
         self.min_pixels = self.get_parameter('detect.min_pixels').value
         blob_px = int(self.get_parameter('detect.max_line_width_m').value * self.ppm)
@@ -110,15 +157,13 @@ class DetectLane(Node):
         self.contrast_kernel = np.ones((max(3, blob_px), max(3, blob_px)), np.uint8)
         self.edge_kernel = np.ones((7, 7), np.uint8)
         self.white_contrast_min = self.get_parameter('detect.white_contrast_min').value
-        self.side_margin_px = self.get_parameter('detect.side_margin_m').value * self.ppm
         self.auto_threshold = self.get_parameter('detect.auto_threshold').value
         self.auto_low = self.get_parameter('detect.auto_threshold_low').value
         self.auto_high = self.get_parameter('detect.auto_threshold_high').value
-        self.max_missing_fraction = self.get_parameter('reliability.max_missing_fraction').value
         self.reliability_step = self.get_parameter('reliability.step').value
-        self.reliability_threshold = self.get_parameter('reliability.threshold').value
         self.process_every_n = max(1, self.get_parameter('process_every_n').value)
         self.hold_last_center = self.get_parameter('hold_last_center_sec').value
+        self.follow_timeout = self.get_parameter('follow_timeout').value
         self.publish_debug = self.get_parameter('publish_debug_image').value
 
         self.white = self.hsv_bounds('white')
@@ -129,30 +174,45 @@ class DetectLane(Node):
 
         self.reliability_white = 0
         self.reliability_yellow = 0
-        self.left_fit = None      # yellow line, to the robot's left
-        self.right_fit = None     # white line, to the robot's right
-        self.left_fitx = None
-        self.right_fitx = None
-        # Highest and lowest bird's eye rows each line was actually seen on.
-        self.left_top = None
-        self.right_top = None
-        self.left_bottom = None
-        self.right_bottom = None
-        self.last_center = None
-        self.last_center_time = 0.0
+        # The lines are worked on in a map round the robot, at half the bird's
+        # eye resolution: wider than the camera's view, and reaching back
+        # past the axle, to hold the lines that are remembered.
+        self.map_ppm = self.ppm / 2.0
+        self.map_half_width = 0.45
+        self.map_behind = 0.12
+        self.map_shape = None       # set from the first image
+        self.map_far = 0.0
+        self.arc = None             # candidate targets
+        # Odometry of the last few seconds, to find where the robot was when
+        # a picture was taken: (time, x, y, yaw, distance travelled).
+        self.odometry = deque(maxlen=400)
+        self.pose = None            # x, y, yaw when the current picture was taken
+        self.travelled = 0.0
+        self.memory = []            # (travelled, pose, yellow points, white points)
+        self.last_target = None     # (ahead, left) of the axle, metres
+        self.last_target_time = 0.0
+        self.follow = None
+        self.follow_time = 0.0
 
         self.create_subscription(Image, '/detect/image_input', self.callback_image, 1)
+        self.create_subscription(String, '/detect/lane_follow', self.callback_follow, 1)
+        self.create_subscription(Odometry, '/odom', self.callback_odom, 1)
         self.pub_lane = self.create_publisher(Float64, '/detect/lane', 1)
         self.pub_offset = self.create_publisher(Float64, '/detect/lane_offset', 1)
+        self.pub_target = self.create_publisher(PointStamped, '/detect/lane_target', 1)
         self.pub_state = self.create_publisher(UInt8, '/detect/lane_state', 1)
         self.pub_reliability_white = self.create_publisher(
             UInt8, '/detect/white_line_reliability', 1)
         self.pub_reliability_yellow = self.create_publisher(
             UInt8, '/detect/yellow_line_reliability', 1)
+        self.pub_lines = {
+            'yellow': self.create_publisher(PointCloud2, '/detect/lane_lines/yellow', 1),
+            'white': self.create_publisher(PointCloud2, '/detect/lane_lines/white', 1),
+        }
         self.pub_image = self.create_publisher(Image, '/detect/image_output', 1)
 
         self.get_logger().info(
-            f'Lane width {self.lane_width_px:.0f} px at {self.ppm:.0f} px/m, '
+            f'Lane {self.lane_width:.2f} m between the lines at {self.ppm:.0f} px/m, '
             f'control point {self.lookahead:.2f} m ahead'
         )
 
@@ -166,6 +226,36 @@ class DetectLane(Node):
 
     def now(self):
         return self.get_clock().now().nanoseconds / 1e9
+
+    def callback_odom(self, msg):
+        position = msg.pose.pose.position
+        q = msg.pose.pose.orientation
+        yaw = np.arctan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        travelled = 0.0
+        if self.odometry:
+            _, x, y, _, travelled = self.odometry[-1]
+            travelled += float(np.hypot(position.x - x, position.y - y))
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        self.odometry.append((stamp, position.x, position.y, float(yaw), travelled))
+
+    def locate(self, stamp):
+        """Set the pose to where the robot was at `stamp`.
+
+        A picture is a tenth of a second old or more by the time it gets here,
+        and in a bend the robot has turned several degrees since. Lines laid
+        down with the pose of the moment land that far out of place.
+        """
+        if not self.odometry:
+            return
+        when = stamp.sec + stamp.nanosec * 1e-9
+        _, x, y, yaw, travelled = min(self.odometry, key=lambda entry: abs(entry[0] - when))
+        self.pose = (x, y, yaw)
+        self.travelled = travelled
+
+    def callback_follow(self, msg):
+        """Take the 'left' or the 'right' branch where the road forks."""
+        self.follow = msg.data if msg.data in ('left', 'right') else None
+        self.follow_time = self.now()
 
     # --- masking ---------------------------------------------------------
 
@@ -199,7 +289,11 @@ class DetectLane(Node):
         value = hsv[..., 2].copy()
         value[outside > 0] = 255
         tophat = cv2.morphologyEx(value, cv2.MORPH_TOPHAT, self.contrast_kernel)
-        return (tophat >= self.white_contrast_min).astype(np.uint8) * 255
+        bright = (tophat >= self.white_contrast_min).astype(np.uint8) * 255
+        # Where the edge of the view runs to a point, the strip counted as
+        # bright is itself thin; nothing along the edge is a line.
+        bright[outside > 0] = 0
+        return bright
 
     def mask_line(self, hsv, bounds, reliability, only=None):
         mask = cv2.inRange(hsv, bounds['lower'], bounds['upper'])
@@ -216,70 +310,174 @@ class DetectLane(Node):
             elif pixels < self.auto_low and bounds['lower'][2] > 50:
                 bounds['lower'][2] -= 5
 
-        rows_with_line = int(np.count_nonzero(mask.any(axis=1)))
-        missing = 1.0 - rows_with_line / mask.shape[0]
-        # A scatter of stray pixels can touch many rows; it is not a line.
-        if missing > self.max_missing_fraction or pixels < self.min_pixels:
+        # A scatter of stray pixels is not a line.
+        if pixels < self.min_pixels:
             reliability = max(0, reliability - self.reliability_step)
         else:
             reliability = min(100, reliability + self.reliability_step)
 
         return pixels, mask, reliability
 
-    # --- curve fitting ---------------------------------------------------
+    # --- geometry --------------------------------------------------------
 
-    def fit_around(self, fit, mask, margin=100):
-        nonzero_y, nonzero_x = mask.nonzero()
-        if len(nonzero_x) == 0:
-            return None
-        centers = fit[0] * nonzero_y ** 2 + fit[1] * nonzero_y + fit[2]
-        inside = (nonzero_x > centers - margin) & (nonzero_x < centers + margin)
-        if np.count_nonzero(inside) < 50:
-            return None
-        return (np.polyfit(nonzero_y[inside], nonzero_x[inside], 2),
-                int(nonzero_y[inside].min()), int(nonzero_y[inside].max()))
+    def to_pixel(self, ahead, left):
+        """Map pixel (x, y) of a point given in metres from the axle."""
+        return (self.map_shape[1] / 2.0 - left * self.map_ppm,
+                (self.map_far - ahead) * self.map_ppm)
 
-    def fit_sliding_window(self, mask, side, windows=20, margin=50, min_pixels=50):
-        height, width = mask.shape
-        histogram = np.sum(mask[height // 2:, :], axis=0)
-        midpoint = width // 2
-        if side == 'left':
-            base = int(np.argmax(histogram[:midpoint]))
-        else:
-            base = int(np.argmax(histogram[midpoint:])) + midpoint
+    def to_robot(self, x, y):
+        """Metres ahead and to the left of the axle of a map pixel."""
+        return (self.map_far - y / self.map_ppm,
+                (self.map_shape[1] / 2.0 - x) / self.map_ppm)
 
-        nonzero_y, nonzero_x = mask.nonzero()
-        window_height = height // windows
-        current = base
-        collected = []
+    def build_map(self, image_shape):
+        """Lay out the map and the candidate targets for this image size."""
+        self.map_far = self.near + image_shape[0] / self.ppm
+        self.map_shape = (int((self.map_far + self.map_behind) * self.map_ppm),
+                          int(2 * self.map_half_width * self.map_ppm))
+        # Candidate targets: the points `lookahead` from the axle.
+        angle = np.linspace(-self.max_target_angle, self.max_target_angle, 221)
+        ahead = self.lookahead * np.cos(angle)
+        left = self.lookahead * np.sin(angle)
+        x, y = self.to_pixel(ahead, left)
+        self.arc = {
+            'angle': angle, 'ahead': ahead, 'left': left,
+            'x': np.int_(np.round(x)), 'y': np.int_(np.round(y)),
+        }
 
-        for window in range(windows):
-            y_low = height - (window + 1) * window_height
-            y_high = height - window * window_height
-            inside = (
-                (nonzero_y >= y_low) & (nonzero_y < y_high) &
-                (nonzero_x >= current - margin) & (nonzero_x < current + margin)
-            ).nonzero()[0]
-            collected.append(inside)
-            if len(inside) > min_pixels:
-                current = int(np.mean(nonzero_x[inside]))
+    def line_points(self, mask):
+        """Where a bird's eye mask has line, in metres from the axle (N x 2)."""
+        small = cv2.resize(mask, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
+        y, x = (small >= 128).nonzero()
+        ahead = self.near + (small.shape[0] - 1 - y) / self.map_ppm
+        left = (small.shape[1] / 2.0 - x) / self.map_ppm
+        return np.stack([ahead, left], axis=1)
 
-        collected = np.concatenate(collected)
-        if len(collected) < 50:
-            return None
-        return (np.polyfit(nonzero_y[collected], nonzero_x[collected], 2),
-                int(nonzero_y[collected].min()), int(nonzero_y[collected].max()))
+    def draw(self, points):
+        """Map mask of points given in metres from the axle."""
+        mask = np.zeros(self.map_shape, np.uint8)
+        x, y = self.to_pixel(points[:, 0], points[:, 1])
+        x, y = np.int_(np.round(x)), np.int_(np.round(y))
+        inside = (x >= 0) & (x < mask.shape[1]) & (y >= 0) & (y < mask.shape[0])
+        mask[y[inside], x[inside]] = 255
+        return mask
 
-    def update_line(self, fit, mask, side):
-        """Track the line from the previous fit, falling back to a fresh search.
+    def remembered(self, index):
+        """Lines seen earlier, moved to where they are from the robot now."""
+        if self.pose is None or not self.memory:
+            return np.zeros(self.map_shape, np.uint8)
+        x_now, y_now, yaw_now = self.pose
+        moved = []
+        for entry in self.memory:
+            points = entry[index]
+            x_then, y_then, yaw_then = entry[1]
+            turn = yaw_then - yaw_now
+            cos_t, sin_t = np.cos(turn), np.sin(turn)
+            # Where the robot was then, seen from where it is now.
+            dx, dy = x_then - x_now, y_then - y_now
+            ahead_0 = np.cos(yaw_now) * dx + np.sin(yaw_now) * dy
+            left_0 = -np.sin(yaw_now) * dx + np.cos(yaw_now) * dy
+            moved.append(np.stack([
+                ahead_0 + cos_t * points[:, 0] - sin_t * points[:, 1],
+                left_0 + sin_t * points[:, 0] + cos_t * points[:, 1],
+            ], axis=1))
+        # The remembered points are thinned out; close the gaps between them.
+        return cv2.dilate(self.draw(np.concatenate(moved)), np.ones((3, 3), np.uint8))
 
-        Returns the fit and the highest (furthest) and lowest (nearest) rows
-        it was fitted on, or None.
+    def remember(self, yellow_points, white_points):
+        """Keep this frame's lines, and drop what is too far behind."""
+        if self.pose is None:
+            return
+        if self.memory:
+            _, (x, y, yaw), _, _ = self.memory[-1]
+            turned = abs(np.arctan2(np.sin(self.pose[2] - yaw), np.cos(self.pose[2] - yaw)))
+            if np.hypot(self.pose[0] - x, self.pose[1] - y) < 0.015 and turned < 0.05:
+                return
+        self.memory.append((self.travelled, self.pose, yellow_points[::3], white_points[::3]))
+        self.memory = [entry for entry in self.memory
+                       if self.travelled - entry[0] < self.memory_distance][-40:]
+
+    def line_along_arc(self, mask, side):
+        """Distance from each candidate to a line, and whether it bounds the lane there.
+
+        Returns (distance in metres, usable) per candidate. A line bounds the
+        lane at a candidate when it is near enough to say anything, and lies
+        on its own side of the way from the robot to the candidate: yellow on
+        the left, white on the right. That is what tells the robot which way
+        to turn at a line running across in front of it, and what keeps it
+        from taking the far side of a line for the lane.
         """
-        result = self.fit_around(fit, mask) if fit is not None else None
-        if result is None:
-            result = self.fit_sliding_window(mask, side)
-        return result
+        arc = self.arc
+        if not mask.any():
+            return np.zeros(len(arc['x'])), np.zeros(len(arc['x']), bool)
+        distance, labels = cv2.distanceTransformWithLabels(
+            cv2.bitwise_not(mask), cv2.DIST_L2, cv2.DIST_MASK_5,
+            labelType=cv2.DIST_LABEL_PIXEL)
+        # Label of a line pixel -> where that pixel is.
+        line_y, line_x = mask.nonzero()
+        where = np.zeros((labels.max() + 1, 2), np.float32)
+        where[labels[line_y, line_x]] = np.stack([line_x, line_y], axis=1)
+
+        nearest = where[labels[arc['y'], arc['x']]]
+        metres = distance[arc['y'], arc['x']] / self.map_ppm
+        near_ahead, near_left = self.to_robot(nearest[:, 0], nearest[:, 1])
+        # Sine of the angle from the way to the candidate round to the line:
+        # positive with the line on the left.
+        to_line_ahead = near_ahead - arc['ahead']
+        to_line_left = near_left - arc['left']
+        sine = ((arc['ahead'] * to_line_left - arc['left'] * to_line_ahead)
+                / (self.lookahead * np.maximum(metres, 1e-3)))
+        on_its_side = sine > 0.15 if side == 'left' else sine < -0.15
+        return metres, on_its_side & (metres < self.max_line_distance)
+
+    def clear_way(self, lines):
+        """Candidates that can be reached without driving across a line."""
+        arc = self.arc
+        clear = np.ones(len(arc['x']), bool)
+        origin_x, origin_y = self.to_pixel(0.0, 0.0)
+        for fraction in np.linspace(0.3, 0.9, 7):
+            x = np.int_(origin_x + fraction * (arc['x'] - origin_x))
+            y = np.int_(origin_y + fraction * (arc['y'] - origin_y))
+            clear &= lines[y, x] == 0
+        return clear
+
+    def find_target(self, yellow_mask, white_mask):
+        """Pick the candidate on the lane centre: (index, state), or (None, LANE_NONE)."""
+        half = self.lane_width / 2.0
+        yellow, yellow_ok = self.line_along_arc(yellow_mask, 'left')
+        white, white_ok = self.line_along_arc(white_mask, 'right')
+        clear = self.clear_way(yellow_mask | white_mask)
+        yellow_ok &= clear
+        white_ok &= clear
+
+        # How far each candidate is from the middle of the lane: between the
+        # two lines where they are a lane apart, else beside whichever is
+        # there.
+        both = yellow_ok & white_ok & (yellow + white < self.max_width)
+        beside_yellow = np.where(yellow_ok, np.abs(yellow - half), np.inf)
+        beside_white = np.where(white_ok, np.abs(white - half), np.inf)
+        cost = np.where(both, np.abs(yellow - white) / 2.0,
+                        np.minimum(beside_yellow, beside_white))
+        if not np.isfinite(cost).any():
+            return None, LANE_NONE
+
+        centred = np.flatnonzero(cost < self.centre_tolerance)
+        if len(centred) > 0:
+            # Each run of candidates is a way on; at a fork there are two.
+            # The arc runs from right to left.
+            gaps = np.flatnonzero(np.diff(centred) > 1)
+            first = np.concatenate([centred[:1], centred[gaps + 1]])
+            last = np.concatenate([centred[gaps], centred[-1:]])
+            way = -1 if (self.follow or self.fork_side) == 'left' else 0
+            index = int(first[way] + np.argmin(cost[first[way]:last[way] + 1]))
+        else:
+            index = int(np.argmin(cost))
+
+        if both[index]:
+            return index, LANE_BOTH
+        if beside_yellow[index] <= beside_white[index]:
+            return index, LANE_LEFT_ONLY
+        return index, LANE_RIGHT_ONLY
 
     # --- main ------------------------------------------------------------
 
@@ -290,7 +488,8 @@ class DetectLane(Node):
 
         image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        height = image.shape[0]
+        if self.map_shape is None:
+            self.build_map(image.shape[:2])
 
         yellow_pixels, yellow_mask, self.reliability_yellow = self.mask_line(
             hsv, self.yellow, self.reliability_yellow)
@@ -301,130 +500,73 @@ class DetectLane(Node):
         self.pub_reliability_yellow.publish(UInt8(data=self.reliability_yellow))
         self.pub_reliability_white.publish(UInt8(data=self.reliability_white))
 
-        plot_y = np.linspace(0, height - 1, height)
-
-        if yellow_pixels > self.min_pixels:
-            result = self.update_line(self.left_fit, yellow_mask, 'left')
-            if result is not None:
-                fit, self.left_top, self.left_bottom = result
-                self.left_fit = fit
-                self.left_fitx = fit[0] * plot_y ** 2 + fit[1] * plot_y + fit[2]
-
-        if white_pixels > self.min_pixels:
-            result = self.update_line(self.right_fit, white_mask, 'right')
-            if result is not None:
-                fit, self.right_top, self.right_bottom = result
-                self.right_fit = fit
-                self.right_fitx = fit[0] * plot_y ** 2 + fit[1] * plot_y + fit[2]
-
-        self.publish_lane(image, plot_y, yellow_pixels, white_pixels, msg.header)
-
-    def usable(self, side, width):
-        """A line counts when it is reliable, fitted, and on its own side.
-
-        The side check is what keeps the robot on the track: the white line
-        lives to the right of the robot and the yellow to its left, so a white
-        line that has wandered to the left of centre means the robot is outside
-        the lane, and steering half a lane further left would take it off the
-        course.
-
-        The check is made where the line is closest to the robot. Further out,
-        in a tight bend, the outer line legitimately crosses to the other
-        side: checked there, the white line of a left bend gets thrown out
-        and the robot, left with nothing, turns into the inside of the bend.
-        """
-        center = width / 2.0
-        if side == 'left':
-            return (self.reliability_yellow > self.reliability_threshold
-                    and self.left_fitx is not None
-                    and self.left_fitx[self.left_bottom] < center + self.side_margin_px)
-        return (self.reliability_white > self.reliability_threshold
-                and self.right_fitx is not None
-                and self.right_fitx[self.right_bottom] > center - self.side_margin_px)
-
-    def publish_lane(self, image, plot_y, yellow_pixels, white_pixels, header):
-        height, width = image.shape[:2]
-        fresh_yellow = yellow_pixels > self.min_pixels and self.usable('left', width)
-        fresh_white = white_pixels > self.min_pixels and self.usable('right', width)
-
-        center_x = None
-        state = LANE_NONE
-
-        if fresh_yellow and fresh_white:
-            # Only average lines that were seen as far out as the control
-            # point. In a tight bend the inner line shows up only as a short
-            # arc near the robot, and its fit extended out to the control
-            # point swings wildly; averaging with it steers the robot onto
-            # that line.
-            row = self.control_row(height)
-            yellow_reaches = self.left_top <= row + self.reach_tolerance_px
-            white_reaches = self.right_top <= row + self.reach_tolerance_px
-            if yellow_reaches == white_reaches:
-                center_x = np.mean([self.left_fitx, self.right_fitx], axis=0)
-                state = LANE_BOTH
-            elif white_reaches:
-                center_x = self.right_fitx - self.lane_width_px / 2.0
-                state = LANE_RIGHT_ONLY
-            else:
-                center_x = self.left_fitx + self.lane_width_px / 2.0
-                state = LANE_LEFT_ONLY
-        elif fresh_yellow:
-            center_x = self.left_fitx + self.lane_width_px / 2.0
-            state = LANE_LEFT_ONLY
-        elif fresh_white:
-            center_x = self.right_fitx - self.lane_width_px / 2.0
-            state = LANE_RIGHT_ONLY
-        elif self.usable('left', width):
-            # Reliable but not seen in this frame: keep steering on the last curve.
-            center_x = self.left_fitx + self.lane_width_px / 2.0
-            state = LANE_LEFT_ONLY
-        elif self.usable('right', width):
-            center_x = self.right_fitx - self.lane_width_px / 2.0
-            state = LANE_RIGHT_ONLY
-
-        row = self.control_row(height)
         now = self.now()
+        if now - self.follow_time > self.follow_timeout:
+            self.follow = None
 
-        if center_x is not None:
-            control_x = float(center_x[row])
-            self.last_center = control_x
-            self.last_center_time = now
-        elif self.last_center is not None and now - self.last_center_time < self.hold_last_center:
+        self.locate(msg.header.stamp)
+        # A scatter of stray pixels is not a line.
+        none = np.zeros((0, 2))
+        yellow_points = self.line_points(yellow_mask) if yellow_pixels > self.min_pixels else none
+        white_points = self.line_points(white_mask) if white_pixels > self.min_pixels else none
+        yellow_map = self.draw(yellow_points) | self.remembered(2)
+        white_map = self.draw(white_points) | self.remembered(3)
+        self.remember(yellow_points, white_points)
+        self.publish_lines(yellow_points, white_points, msg.header.stamp)
+
+        index, state = self.find_target(yellow_map, white_map)
+        if index is not None:
+            target = (float(self.arc['ahead'][index]), float(self.arc['left'][index]))
+            self.last_target = target
+            self.last_target_time = now
+        elif self.last_target is not None and now - self.last_target_time < self.hold_last_center:
             # Bridge a dropped frame or two rather than handing back a gap in
             # the command stream; standing still is what ends a run.
-            control_x = self.last_center
+            target = self.last_target
         else:
-            control_x = None
+            target = None
 
         self.pub_state.publish(UInt8(data=state))
 
-        if control_x is not None:
-            self.pub_lane.publish(Float64(data=control_x))
-            self.pub_offset.publish(Float64(data=(control_x - width / 2.0) / self.ppm))
+        if target is not None:
+            ahead, left = target
+            self.pub_lane.publish(Float64(data=image.shape[1] / 2.0 - left * self.ppm))
+            self.pub_offset.publish(Float64(data=-left))
+            point = PointStamped()
+            point.header.stamp = msg.header.stamp
+            point.header.frame_id = 'base_footprint'
+            point.point.x = ahead
+            point.point.y = left
+            self.pub_target.publish(point)
 
         if self.publish_debug:
-            self.publish_debug_image(image, plot_y, center_x, row, state, header)
+            self.publish_debug_image(yellow_map, white_map, target, state, msg.header)
 
-    def control_row(self, height):
-        """Bird's eye row that sits `control_lookahead` metres ahead."""
-        row = height - 1 - int((self.lookahead - self.near) * self.ppm)
-        return int(np.clip(row, 0, height - 1))
+    def publish_lines(self, yellow_points, white_points, stamp):
+        """Publish this picture's lines as points (x ahead, y left of the axle)."""
+        for colour, points in (('yellow', yellow_points), ('white', white_points)):
+            points = points[::3]
+            cloud = np.zeros((len(points), 3), np.float32)
+            cloud[:, :2] = points
+            header = Header(stamp=stamp, frame_id='base_footprint')
+            self.pub_lines[colour].publish(point_cloud2.create_cloud_xyz32(header, cloud))
 
-    def publish_debug_image(self, image, plot_y, center_x, row, state, header):
-        overlay = image.copy()
-        for curve, color in ((self.left_fitx, (0, 200, 255)), (self.right_fitx, (255, 200, 0))):
-            if curve is None:
-                continue
-            points = np.int_(np.transpose(np.vstack([curve, plot_y])))
-            cv2.polylines(overlay, [points], False, color, 8)
-        if center_x is not None:
-            points = np.int_(np.transpose(np.vstack([center_x, plot_y])))
-            cv2.polylines(overlay, [points], False, (0, 255, 0), 6)
-            cv2.circle(overlay, (int(center_x[row]), row), 14, (0, 0, 255), -1)
+    def publish_debug_image(self, yellow_map, white_map, target, state, header):
+        """Publish the map round the robot: lines, the arc of candidates, the target."""
+        overlay = np.full(self.map_shape + (3,), 40, np.uint8)
+        overlay[yellow_map > 0] = (0, 200, 255)
+        overlay[white_map > 0] = (255, 255, 255)
+        for x, y in zip(self.arc['x'][::4], self.arc['y'][::4]):
+            cv2.circle(overlay, (int(x), int(y)), 1, (0, 255, 0), -1)
+        x, y = self.to_pixel(0.0, 0.0)
+        cv2.circle(overlay, (int(x), int(y)), 4, (255, 120, 0), -1)
+        if target is not None:
+            x, y = self.to_pixel(target[0], target[1])
+            cv2.circle(overlay, (int(x), int(y)), 7, (0, 0, 255), -1)
         cv2.putText(
             overlay,
-            f'state {state}  y{self.reliability_yellow} w{self.reliability_white}',
-            (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2
+            f'state {state}' + (f'  follow {self.follow}' if self.follow else ''),
+            (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1
         )
         out = self.bridge.cv2_to_imgmsg(overlay, 'bgr8')
         out.header = header

@@ -59,7 +59,10 @@ class CmdVelMux(Node):
         self.declare_parameter('blocked_timeout', 3.0)
         self.declare_parameter('unstick_duration', 1.5)
         self.declare_parameter('unstick_speed', -0.07)
-        self.declare_parameter('scan_change_threshold', 0.03)
+        # A return has moved when its range differs by this much, well clear
+        # of the noise; the robot has when this share of the returns have.
+        self.declare_parameter('scan_change_threshold', 0.05)
+        self.declare_parameter('scan_moved_share', 0.05)
 
         self.input_timeout = self.get_parameter('input_timeout').value
         self.stall_timeout = self.get_parameter('stall_timeout').value
@@ -69,6 +72,7 @@ class CmdVelMux(Node):
         self.unstick_duration = self.get_parameter('unstick_duration').value
         self.unstick_speed = self.get_parameter('unstick_speed').value
         self.scan_change_threshold = self.get_parameter('scan_change_threshold').value
+        self.scan_moved_share = self.get_parameter('scan_moved_share').value
         publish_rate = self.get_parameter('publish_rate').value
 
         self.commands = {name: None for name, _ in INPUTS}
@@ -119,7 +123,7 @@ class CmdVelMux(Node):
         self.latest_scan = ranges
 
     def scan_change(self):
-        """How far the view has moved since pushing began, in metres.
+        """How much of the view has moved since pushing began: a fraction.
 
         A second opinion on motion: when the robot is wedged against
         something the wheels keep turning and /odom keeps reporting the
@@ -127,6 +131,11 @@ class CmdVelMux(Node):
         millimetres the robot moves, so compare against the scan taken when
         pushing began instead. None when there is too little to compare,
         e.g. out in the open.
+
+        It is the share of the returns that have moved that counts, not how
+        far the typical one has: driving along a wall leaves every return
+        from the wall where it was, and only what else is in view shows that
+        the robot is moving.
         """
         if self.reference_scan is None or self.latest_scan is None:
             return None
@@ -136,7 +145,7 @@ class CmdVelMux(Node):
         difference = difference[np.isfinite(difference)]
         if difference.size <= 20:
             return None
-        return float(np.median(difference))
+        return float(np.mean(difference > self.scan_change_threshold))
 
     def callback_run_active(self, msg):
         if msg.data and not self.run_active:
@@ -158,6 +167,9 @@ class CmdVelMux(Node):
 
     def arbitrate(self):
         now = self.get_clock().now().nanoseconds / 1e9
+        if self.last_motion_time == 0.0:
+            # Simulated time had not started when the node came up.
+            self.last_motion_time = now
         name, command = self.select(now)
 
         if command is None:
@@ -221,7 +233,7 @@ class CmdVelMux(Node):
             self.reference_scan = self.latest_scan
         elif now - self.pushing_since > self.blocked_timeout:
             change = self.scan_change()
-            wedged = change is not None and change < self.scan_change_threshold
+            wedged = change is not None and change < self.scan_moved_share
             if self.measured_speed < 0.01 or wedged:
                 self.get_logger().error('Robot is blocked, backing off.')
                 self.unstick_until = now + self.unstick_duration

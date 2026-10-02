@@ -16,10 +16,13 @@
 
 """Lane following controller.
 
-Steering is a PD loop on the lateral offset of the lane centre, in metres, so
-the gains keep their meaning if the bird's eye view is recalibrated.  Speed
-falls off with the offset, which is what gets the robot around the tight bends
-of the AutoRace course without cutting them.
+Steering is pure pursuit: the lane detector hands over a point on the lane
+centre a short way ahead, and the robot drives the arc that passes through it.
+On an arc that is exact, so the robot holds the middle of the lane round a
+bend instead of drifting to one side of it, and the turn rate follows from the
+speed rather than from a gain tuned for one speed.  The lane leaves the robot
+about 2 cm either side, which a fixed gain on the sideways offset could not
+keep to.  Speed comes down where the arc is tight.
 
 When the lane goes missing the controller does not simply give up: it keeps
 creeping forward while turning the way it was last steering, which is usually
@@ -27,10 +30,12 @@ enough to bring the line back into view.  A robot that stands still for 30 s
 ends its run, so stopping is the last resort, not the first.
 """
 
+from geometry_msgs.msg import PointStamped
 from geometry_msgs.msg import Twist
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float64
+from std_msgs.msg import String
 from std_msgs.msg import UInt8
 
 
@@ -41,38 +46,42 @@ class LaneController(Node):
 
         self.declare_parameter('max_speed', 0.16)
         self.declare_parameter('min_speed', 0.05)
-        self.declare_parameter('kp', 2.6)
-        self.declare_parameter('kd', 6.0)
+        # 1.0 is plain pure pursuit; more turns in harder towards the target.
+        self.declare_parameter('pursuit_gain', 1.0)
         self.declare_parameter('max_angular', 2.0)
-        self.declare_parameter('slowdown_offset', 0.12)
+        # Turn rate above which the robot slows down rather than turn faster.
+        self.declare_parameter('cornering_rate', 0.6)
         self.declare_parameter('lane_timeout', 0.5)
         self.declare_parameter('recovery_speed', 0.05)
         self.declare_parameter('recovery_angular', 0.45)
         self.declare_parameter('recovery_timeout', 8.0)
+        self.declare_parameter('follow_timeout', 0.5)
         self.declare_parameter('publish_rate', 20.0)
 
         self.max_speed = self.get_parameter('max_speed').value
         self.min_speed = self.get_parameter('min_speed').value
-        self.kp = self.get_parameter('kp').value
-        self.kd = self.get_parameter('kd').value
+        self.pursuit_gain = self.get_parameter('pursuit_gain').value
         self.max_angular = self.get_parameter('max_angular').value
-        self.slowdown_offset = self.get_parameter('slowdown_offset').value
+        self.cornering_rate = self.get_parameter('cornering_rate').value
         self.lane_timeout = self.get_parameter('lane_timeout').value
         self.recovery_speed = self.get_parameter('recovery_speed').value
         self.recovery_angular = self.get_parameter('recovery_angular').value
         self.recovery_timeout = self.get_parameter('recovery_timeout').value
+        self.follow_timeout = self.get_parameter('follow_timeout').value
         rate = self.get_parameter('publish_rate').value
 
-        self.create_subscription(Float64, '/detect/lane_offset', self.callback_offset, 1)
+        self.create_subscription(PointStamped, '/detect/lane_target', self.callback_target, 1)
         self.create_subscription(Float64, '/control/max_vel', self.callback_max_vel, 1)
         self.create_subscription(UInt8, '/detect/lane_state', self.callback_state, 1)
+        self.create_subscription(String, '/detect/lane_follow', self.callback_follow, 1)
         self.pub_cmd_vel = self.create_publisher(Twist, '/cmd_vel/lane', 1)
 
-        self.offset = None
-        self.offset_time = 0.0
-        self.last_offset = 0.0
+        self.target = None          # (ahead, left) of the axle, metres
+        self.target_time = 0.0
         self.last_angular = 0.0
         self.lane_state = 0
+        self.follow = None
+        self.follow_time = 0.0
         self.recovering_since = None
 
         self.create_timer(1.0 / rate, self.update)
@@ -80,9 +89,9 @@ class LaneController(Node):
     def now(self):
         return self.get_clock().now().nanoseconds / 1e9
 
-    def callback_offset(self, msg):
-        self.offset = msg.data
-        self.offset_time = self.now()
+    def callback_target(self, msg):
+        self.target = (msg.point.x, msg.point.y)
+        self.target_time = self.now()
 
     def callback_max_vel(self, msg):
         self.max_speed = msg.data
@@ -90,24 +99,28 @@ class LaneController(Node):
     def callback_state(self, msg):
         self.lane_state = msg.data
 
+    def callback_follow(self, msg):
+        self.follow = msg.data if msg.data in ('left', 'right') else None
+        self.follow_time = self.now()
+
     def update(self):
         now = self.now()
-        fresh = self.offset is not None and now - self.offset_time < self.lane_timeout
+        fresh = self.target is not None and now - self.target_time < self.lane_timeout
 
         twist = Twist()
         if fresh:
             self.recovering_since = None
-            error = self.offset
-            derivative = error - self.last_offset
-            self.last_offset = error
+            ahead, left = self.target
+            # Curvature of the arc from the axle, along the heading, through
+            # the target.
+            curvature = self.pursuit_gain * 2.0 * left / (ahead * ahead + left * left)
 
-            angular = -(self.kp * error + self.kd * derivative)
+            speed = self.max_speed
+            if abs(curvature) * speed > self.cornering_rate:
+                speed = max(self.min_speed, self.cornering_rate / abs(curvature))
+            angular = speed * curvature
             angular = max(-self.max_angular, min(self.max_angular, angular))
             self.last_angular = angular
-
-            # Ease off the throttle as the robot sits further from the centre.
-            slow = max(0.0, 1.0 - abs(error) / self.slowdown_offset) ** 2
-            speed = self.min_speed + (self.max_speed - self.min_speed) * slow
 
             twist.linear.x = speed
             twist.angular.z = angular
@@ -123,7 +136,13 @@ class LaneController(Node):
                 )
                 return
             twist.linear.x = self.recovery_speed
-            if self.last_angular == 0.0:
+            if self.follow is not None and now - self.follow_time < self.follow_timeout:
+                # Asked to follow one line and it is not in view: it is on
+                # its own side of the robot, whichever way the robot was
+                # steering before.
+                direction = 1.0 if self.follow == 'left' else -1.0
+                twist.angular.z = direction * self.recovery_angular
+            elif self.last_angular == 0.0:
                 # Nothing has been tracked yet, so there is no direction to
                 # search in; creeping straight brings the lane into view.
                 twist.angular.z = 0.0
