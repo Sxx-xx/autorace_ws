@@ -22,12 +22,16 @@ lines on its floor and no light, so the lane camera is of no use; the laser
 is what the robot has, and the walls are what it steers by.
 
 Entering, the robot passes between the two ends of the wall, 15 cm to either
-side, with walls all round ahead of it: nearly every beam of the front half
+side, with walls all round ahead of it: nearly every beam of the front sector
 of the scan comes back from within a couple of metres, where in the open
-most are lost. The two together are what start the mission; the wall ends
+most are lost. The two together, with the wall ends still a little way
+ahead, are what start the mission: early enough that the lane follower, which
+loses its lines at the wall, has not yet begun to cast about. The wall ends
 alone would also fit passing between two obstacles in the construction
-zone. From that moment the robot keeps its own
-reckoning of where it is in the tunnel, from the odometry, and corrects it
+zone. The robot may come through the doorway askew, so which way the tunnel
+runs is read off the walls in that first scan, not taken from the heading.
+From that moment the robot keeps its own reckoning of where it is in the
+tunnel, from the odometry, and corrects it
 on every scan against the four walls: each wall's returns say how far off
 the reckoning is across that wall, and which way they run says how far off
 it is in heading.
@@ -115,11 +119,12 @@ class TunnelMission(Node):
         self.declare_parameter('entrance_right', 0.18)
         self.declare_parameter('exit_x', 1.68)
         self.declare_parameter('opening_width', 0.34)
-        # Walls beside the robot, this near on both sides, with at least
-        # this share of the beams ahead returning from within 2.5 m, mean
-        # the entrance.
+        # Wall ends this near on both sides, up to this far ahead, with at
+        # least this share of the beams within 60 degrees of straight ahead
+        # returning from within 2.5 m, mean the entrance.
         self.declare_parameter('doorway_half_width', 0.22)
-        self.declare_parameter('enclosed_fraction', 0.8)
+        self.declare_parameter('doorway_ahead', 0.30)
+        self.declare_parameter('enclosed_fraction', 0.7)
         # Room to keep from walls and obstacles, and the room it likes.
         self.declare_parameter('robot_radius', 0.13)
         self.declare_parameter('comfort_clearance', 0.25)
@@ -143,6 +148,7 @@ class TunnelMission(Node):
         self.exit_x = value('exit_x')
         self.opening = value('opening_width')
         self.doorway = value('doorway_half_width')
+        self.doorway_ahead = value('doorway_ahead')
         self.enclosed_fraction = value('enclosed_fraction')
         self.robot_radius = value('robot_radius')
         self.comfort = value('comfort_clearance')
@@ -170,6 +176,8 @@ class TunnelMission(Node):
         self.odometry = deque(maxlen=400)
         self.doorway_count = 0      # scans in a row between the wall ends
         self.doorway_sides = (0.0, 0.0)
+        self.doorway_distance = 0.0  # from the axle to the wall ends
+        self.last_points = None     # the latest scan, in the robot frame
         self.pose = None            # x, y, heading in the tunnel
         self.odom_pose = None       # the odometry pose the above was taken from
         self.path = None
@@ -221,6 +229,22 @@ class TunnelMission(Node):
         cos_h, sin_h = math.cos(heading), math.sin(heading)
         return np.stack([x + cos_h * points[:, 0] - sin_h * points[:, 1],
                          y + sin_h * points[:, 0] + cos_h * points[:, 1]], axis=1)
+
+    def first_heading(self):
+        """The heading, in the tunnel, that lays the scan best along the walls."""
+        best = None
+        x_0, y_0, _ = self.pose
+        for heading in np.linspace(-1.2, 1.2, 49):
+            self.pose = (x_0, y_0, heading)
+            x, y = self.in_tunnel(self.last_points).T
+            inside = ((x > -0.1) & (x < self.inside + 0.1)
+                      & (y > self.right - 0.1) & (y < self.left + 0.1))
+            on_wall = inside & ((np.abs(x) < 0.05) | (np.abs(x - self.inside) < 0.05)
+                                | (np.abs(y - self.right) < 0.05) | (np.abs(y - self.left) < 0.05))
+            count = int(np.count_nonzero(on_wall))
+            if best is None or count > best[0]:
+                best = (count, heading)
+        return best[1]
 
     def align(self, points):
         """Correct the pose against the walls the scan shows."""
@@ -294,11 +318,19 @@ class TunnelMission(Node):
     def callback_active(self, msg):
         if msg.data:
             self.active_time = self.now()
-            if self.phase is None and self.odom_pose is not None:
+            if (self.phase is None and self.odom_pose is not None
+                    and self.last_points is not None):
                 left, right = self.doorway_sides
                 # In the doorway: the entry wall is here, the entrance's
-                # middle is between the two wall ends, the way in is ahead.
-                self.pose = (0.0, (right - left) / 2.0, 0.0)
+                # middle is between the two wall ends, and the walls say
+                # which way the tunnel runs from here.
+                self.pose = (-self.doorway_distance, (right - left) / 2.0, 0.0)
+                self.pose = (self.pose[0], self.pose[1], self.first_heading())
+                for _ in range(3):
+                    self.align(self.in_tunnel(self.last_points))
+                self.get_logger().info(
+                    'Tunnel: heading %.0f deg off the tunnel at the entrance.'
+                    % math.degrees(-self.pose[2]))
                 self.hits[:] = 0.0
                 self.path = None
                 self.get_logger().info('Tunnel: in the entrance, driving through.')
@@ -333,16 +365,18 @@ class TunnelMission(Node):
         angles = msg.angle_min + np.arange(len(ranges)) * msg.angle_increment
         points = np.stack([self.lidar_offset + ranges[seen] * np.cos(angles[seen]),
                            ranges[seen] * np.sin(angles[seen])], axis=1)
+        self.last_points = points
 
-        # Wall ends to both sides, level with the robot.
-        beside = np.abs(points[:, 0]) < 0.12
-        left = points[beside & (points[:, 1] > 0.08) & (points[:, 1] < self.doorway), 1]
-        right = points[beside & (points[:, 1] < -0.08) & (points[:, 1] > -self.doorway), 1]
-        ahead = np.cos(angles) > 0.0
-        enclosed = np.mean(seen[ahead] & (ranges[ahead] < 2.5))
+        # Wall ends to both sides, level with the robot or a little ahead.
+        beside = (points[:, 0] > -0.12) & (points[:, 0] < self.doorway_ahead)
+        left = points[beside & (points[:, 1] > 0.08) & (points[:, 1] < self.doorway)]
+        right = points[beside & (points[:, 1] < -0.08) & (points[:, 1] > -self.doorway)]
+        sector = np.cos(angles) > 0.5
+        enclosed = np.mean(seen[sector] & (ranges[sector] < 2.5))
         if len(left) >= 3 and len(right) >= 3 and enclosed >= self.enclosed_fraction:
             self.doorway_count += 1
-            self.doorway_sides = (float(np.median(left)), float(-np.median(right)))
+            self.doorway_sides = (float(np.median(left[:, 1])), float(-np.median(right[:, 1])))
+            self.doorway_distance = float(np.median(np.concatenate([left[:, 0], right[:, 0]])))
         else:
             self.doorway_count = 0
         if self.phase is None:
