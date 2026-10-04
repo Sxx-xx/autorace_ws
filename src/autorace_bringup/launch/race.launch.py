@@ -17,8 +17,8 @@
 """The race: lane following, sign detection, the mission manager and missions.
 
 Missions are added here as they are written; so far there are the traffic
-light, the intersection, the construction zone, parking and the level
-crossing.
+light, the intersection, the construction zone, parking, the level
+crossing and the tunnel.
 """
 
 import os
@@ -147,6 +147,14 @@ def generate_launch_description():
         parameters=[params, sim_time],
     )
 
+    tunnel_mission = Node(
+        package='autorace_core',
+        executable='tunnel_mission',
+        name='tunnel_mission',
+        output='screen',
+        parameters=[params, sim_time],
+    )
+
     return LaunchDescription(
         declare_args + [
             lane_drive,
@@ -160,5 +168,6 @@ def generate_launch_description():
             parking_mission,
             detect_level_crossing,
             level_crossing_mission,
+            tunnel_mission,
         ]
     )

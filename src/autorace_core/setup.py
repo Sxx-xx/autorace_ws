@@ -32,6 +32,7 @@ setup(
             'mission_manager = autorace_core.mission_manager:main',
             'parking_mission = autorace_core.parking_mission:main',
             'traffic_light_mission = autorace_core.traffic_light_mission:main',
+            'tunnel_mission = autorace_core.tunnel_mission:main',
         ],
     },
 )
