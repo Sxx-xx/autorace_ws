@@ -1,8 +1,8 @@
-AutoRace 시뮬레이션 작업 정리 (2026-10-02 ~ 10-03)
+AutoRace 시뮬레이션 작업 정리 (2026-10-02 ~ 10-04)
 ==================================================
 
 10/1 일지의 작업과 이번 작업을 함께 커밋했다 (이전 마지막 커밋: 3babd64).
-출발선에서 차단바 통과까지 전체 주행이 된다. 남은 미션은 터널.
+출발선에서 터널 출구까지 한 바퀴 전체가 된다 (11, 12절).
 
 
 1. 공사 구간 미션
@@ -128,8 +128,8 @@ AutoRace 시뮬레이션 작업 정리 (2026-10-02 ~ 10-03)
 
 8. 알려진 문제 / 다음 할 일
 ----------------------------
-- 터널 미션 - 아직 없음.
-- 차단바까지 전체 주행은 1회만 돌렸다. 주차 깊이 0.29 m 는 전체 주행 2회에서 확인.
+- 터널 안 장애물 배치를 바꿔서는 테스트하지 않았다 (다음 할 일).
+- 주차 깊이 0.29 m 는 전체 주행 4회에서 확인.
 - 초록불에 바로 출발하는 전체 주행은 이번 변경 뒤 다시 돌리지 않았다.
 - 가제보 창에서 월드를 리셋하면 로봇 모델이 사라지고 /odom 이 끊긴다. 시뮬을 다시 띄워야 한다.
 - 이 PC(Wayland)에서는 가제보 창이 빈 화면으로 뜬다. QT_QPA_PLATFORM=xcb 로 띄운다.
@@ -155,15 +155,17 @@ AutoRace 시뮬레이션 작업 정리 (2026-10-02 ~ 10-03)
   rviz:    QT_QPA_PLATFORM=xcb rviz2 -d log/lap_test/tools/construction.rviz --ros-args -p use_sim_time:=true
 
   테스트 스크립트는 log/lap_test/tools/ 에 있다 (log/ 는 git 에 올라가지 않음).
+    run_lap2.sh NAME left|right left|right 520     출발선 → 터널 출구 (한 바퀴)
     run_final.sh NAME left|right left|right 400    출발선 → 차단바 통과
-    run_c.sh / run_p.sh / run_b.sh                 공사 / 주차 / 차단바 구간만
-  기록: log/lap_test/construction, parking, zigzag, crossing
+    run_c.sh / run_p.sh / run_b.sh / run_t.sh      공사 / 주차 / 차단바 / 터널 구간만
+  기록: log/lap_test/construction, parking, zigzag, crossing, tunnel, lap
 
 
 10. 변경 파일 (10/1 일지 이후)
 -------------------------------
 추가
   src/autorace_core/autorace_core/construction_mission.py
+  src/autorace_core/autorace_core/tunnel_mission.py
   src/autorace_core/autorace_core/parking_mission.py
   src/autorace_core/autorace_core/level_crossing_mission.py
   src/autorace_perception/autorace_perception/detect_level_crossing.py
@@ -177,3 +179,37 @@ AutoRace 시뮬레이션 작업 정리 (2026-10-02 ~ 10-03)
   src/autorace_sim/autorace_sim/sim_level_crossing.py
   src/autorace_sim/scripts/gen_course_world.py, worlds/autorace_course.sdf,
   params/course_sim_nodes.yaml, models/autorace_burger/model.sdf
+
+
+11. 터널 미션 (10/4)
+---------------------
+파일: autorace_core/tunnel_mission.py
+
+- 시작: 입구를 지날 때 양옆 22 cm 안에 벽 끝이 잡히고, 라이다 전방 절반에서 2.5 m 안에
+  반사되는 빔이 80 % 이상이면 미션 요청. 저장된 스캔에서 터널 입구/내부는 93~97 %,
+  다른 구간은 59 % 이하였다. 처음에는 양옆 조건만 썼더니 공사 장애물 옆에서 켜져
+  로봇이 경기장 밖까지 나갔다.
+- 위치: 입구를 원점(x 진행 방향, y 왼쪽)으로 한 터널 좌표계. 오도메트리로 움직이고
+  매 스캔 네 벽의 점(벽에서 8 cm 이내, 입구/출구 근처 제외)으로 위치(중앙값)와
+  방향(기울기)을 절반씩 보정한다.
+- 지도: 라이다 점을 2 cm 격자에 누적(7 %/스캔 감쇠)하고 네 벽을 그려 넣는다 (입구·출구는 비움).
+- 경로: 벽·장애물에서 13 cm(robot_radius) 안은 막고, 25 cm 까지는 비용을 올려
+  출구 12 cm 안쪽 지점까지 A*(8방향) 경로를 0.3초마다 다시 잡는다 (약 90 ms).
+  0.15 m 앞 점을 향해 pure pursuit, 속도 0.12 m/s.
+- 종료: 출구에 닿으면 직진으로 나가고, 벽 밖 15 cm 에서 차선 목표가 보이면 done.
+  자기 추정 위치가 터널 범위를 벗어나면 포기하고 차선 주행으로 돌려준다.
+- 파라미터(mission_sim.yaml): inside 1.86 (벽 사이), entrance_right 0.18 (입구 중앙에서
+  오른쪽 벽), exit_x 1.68 (입구 벽을 따라 출구까지). 장애물 위치는 가정하지 않는다.
+
+결과 (차체 기준 여유): 터널만 3회 + 한 바퀴 2회 모두 통과.
+  벽 7.7~7.9 cm, 장애물 8.2 / 15.6 / 9.8 cm 이상, 통과 33~48 초,
+  출구에서 (1.77, 0.16) 차선 중앙으로 나옴.
+
+
+12. 한 바퀴 전체 주행 (10/4)
+-----------------------------
+  출발선 → 신호등 → 갈림길 → 공사 → 주차 → 지그재그 → 차단바 → 터널 → 출발 직선
+  2회 통과 (이정표 좌/우, 주차된 로봇 왼쪽/오른쪽 칸, 1번 센서 0.68 / 0.44 m).
+  공사 구간 여유 2.3~3.1 / 3.7 / 2.8 cm, 주차된 로봇과 5.4~7.6 cm,
+  차단바 대기 0.16~0.19 m, 터널 벽 7.8~7.9 cm.
+  기록: log/lap_test/lap/lap2, lap3 (lap1 은 터널 오작동 때의 것).
