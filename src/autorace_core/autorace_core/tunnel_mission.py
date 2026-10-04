@@ -71,7 +71,7 @@ def wrap(angle):
 
 
 def search(cost, start, goal):
-    """A* over a cost grid, 8-connected: the cells from start to goal, or None.
+    """Search a cost grid, 8-connected (A*): the cells from start to goal, or None.
 
     `cost` is what entering a cell costs, with infinity for cells that cannot
     be entered; a diagonal step costs its cell's cost times root two.
@@ -206,7 +206,7 @@ class TunnelMission(Node):
         return (int(round((y - self.y_0) / RES)), int(round((x - self.x_0) / RES)))
 
     def draw_walls(self):
-        """The four walls as occupied cells, with the entrance and exit left out."""
+        """Draw the four walls as occupied cells, with the entrance and exit left out."""
         walls = np.zeros((self.rows, self.cols), np.uint8)
         half = self.opening / 2.0
         for y in np.arange(self.right, self.left + RES / 2, RES):
@@ -231,7 +231,7 @@ class TunnelMission(Node):
                          y + sin_h * points[:, 0] + cos_h * points[:, 1]], axis=1)
 
     def first_heading(self):
-        """The heading, in the tunnel, that lays the scan best along the walls."""
+        """Find the heading, in the tunnel, that lays the scan best along the walls."""
         best = None
         x_0, y_0, _ = self.pose
         for heading in np.linspace(-1.2, 1.2, 49):
