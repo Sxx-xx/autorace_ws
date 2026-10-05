@@ -31,6 +31,7 @@ robot's cameras do not see the marks.
 import math
 import random
 
+from geometry_msgs.msg import Pose
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
@@ -40,8 +41,7 @@ from std_msgs.msg import String
 
 try:
     from gz.msgs10.boolean_pb2 import Boolean
-    from gz.msgs10.pose_pb2 import Pose
-    from gz.msgs10.pose_v_pb2 import Pose_V
+    from gz.msgs10.pose_pb2 import Pose as GzPose
     from gz.transport13 import Node as GzNode
 except ImportError:
     GzNode = None
@@ -57,10 +57,12 @@ class SimLevelCrossing(Node):
         super().__init__('sim_level_crossing')
 
         # The sensors stand on the course, so it is the robot's true position
-        # they see: the simulator's own, read straight from Gazebo. Without
-        # the Gazebo Python bindings odometry is used instead: it starts at
-        # the spawn pose, so the offset turns it into world coordinates, as
-        # long as the robot has not been moved by hand.
+        # they see: the simulator's own, published by the robot model's
+        # PosePublisher and bridged to /sim/robot_pose. (Subscribing to
+        # Gazebo's pose topic directly fell further and further behind.)
+        # Until it arrives odometry is used instead: it starts at the spawn
+        # pose, so the offset turns it into world coordinates, as long as the
+        # robot has not been moved by hand.
         # The positions come from params/course.yaml, which is generated
         # together with the world file.
         self.declare_parameter('robot_name', 'autorace_burger')
@@ -72,7 +74,9 @@ class SimLevelCrossing(Node):
         # Sensor 1: the trigger point on the approach.
         self.declare_parameter('sensor1_x', 0.0)
         self.declare_parameter('sensor1_y', 0.0)
-        self.declare_parameter('sensor1_radius', 0.20)
+        # Sensor 1 sees the robot this near it, coming up the road towards
+        # the bar: the zigzag road passes close behind it, going the other way.
+        self.declare_parameter('sensor1_radius', 0.12)
         # How far before the bar sensor 1 stands, along the line from the
         # bar back through sensor 2. Zero puts it somewhere between the
         # minimum and the maximum, anew for every lap.
@@ -119,14 +123,9 @@ class SimLevelCrossing(Node):
         self.create_subscription(
             Float64, '/sim/level_crossing/sensor1_distance', self.callback_distance, 1)
         self.truth_seen = False
-        if GzNode is not None:
-            world = self.get_parameter('world_name').value
-            self.gz_node = GzNode()
-            self.gz_node.subscribe(
-                Pose_V, f'/world/{world}/dynamic_pose/info', self.callback_truth)
-        else:
-            self.gz_node = None
-            self.get_logger().warn('No Gazebo bindings, locating the robot by odometry.')
+        self.create_subscription(Pose, '/sim/robot_pose', self.callback_truth, 1)
+        # Gazebo's own transport is used only to move the mark of sensor 1.
+        self.gz_node = GzNode() if GzNode is not None else None
         self.world = self.get_parameter('world_name').value
 
         self.state = 'open'
@@ -134,6 +133,7 @@ class SimLevelCrossing(Node):
         self.triggered = False
         self.violation = False
         self.position = None
+        self.yaw = None
 
         self.mark_placed = True
         self.place_sensor1()
@@ -170,20 +170,19 @@ class SimLevelCrossing(Node):
         if self.gz_node is None:
             self.mark_placed = True
             return
-        mark = Pose()
+        mark = GzPose()
         mark.name = 'crossing_sensor_1'
         mark.position.x, mark.position.y, mark.position.z = *self.sensor1, 0.011
         mark.orientation.w = 1.0
         done, reply = self.gz_node.request(
-            f'/world/{self.world}/set_pose', mark, Pose, Boolean, 500)
+            f'/world/{self.world}/set_pose', mark, GzPose, Boolean, 500)
         self.mark_placed = bool(done and reply.data)
 
     def callback_truth(self, msg):
-        for pose in msg.pose:
-            if pose.name == self.robot_name:
-                self.truth_seen = True
-                self.position = (pose.position.x, pose.position.y)
-                return
+        self.truth_seen = True
+        self.position = (msg.position.x, msg.position.y)
+        q = msg.orientation
+        self.yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
     def callback_odom(self, msg):
         if self.truth_seen:
@@ -204,6 +203,13 @@ class SimLevelCrossing(Node):
         dy = self.position[1] - point[1]
         return math.hypot(dx, dy) <= radius
 
+    def towards_bar(self):
+        """Whether the robot is heading up the road to the bar (true unless known otherwise)."""
+        if self.yaw is None:
+            return True
+        approach = math.atan2(self.bar[1] - self.sensor1[1], self.bar[0] - self.sensor1[0])
+        return abs(math.atan2(math.sin(self.yaw - approach), math.cos(self.yaw - approach))) < 1.0
+
     def set_bar(self, angle):
         self.pub_bar.publish(Float64(data=angle))
 
@@ -217,8 +223,13 @@ class SimLevelCrossing(Node):
                 self.triggered = False
                 self.violation = False
                 self.place_sensor1()
-            if not self.triggered and self.near(self.sensor1, self.sensor1_radius):
-                self.get_logger().info('Sensor 1 triggered, closing the bar.')
+            if (not self.triggered and self.near(self.sensor1, self.sensor1_radius)
+                    and self.towards_bar()):
+                self.get_logger().info(
+                    'Sensor 1 triggered, closing the bar (robot at %.2f, %.2f, yaw %.2f; '
+                    'sensor at %.2f, %.2f).' % (
+                        self.position[0], self.position[1],
+                        self.yaw if self.yaw is not None else 0.0, *self.sensor1))
                 self.triggered = True
                 self.state = 'closed'
                 self.closed_at = self.now()

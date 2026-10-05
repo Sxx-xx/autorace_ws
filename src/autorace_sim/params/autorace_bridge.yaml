@@ -62,3 +62,11 @@
   ros_type_name: "std_msgs/msg/Float64"
   gz_type_name: "gz.msgs.Double"
   direction: ROS_TO_GZ
+
+# The robot's true pose from the simulator, for the course's simulated
+# sensors (sim_level_crossing). The robot itself must not use it.
+- ros_topic_name: "/sim/robot_pose"
+  gz_topic_name: "/model/autorace_burger/pose"
+  ros_type_name: "geometry_msgs/msg/Pose"
+  gz_type_name: "gz.msgs.Pose"
+  direction: GZ_TO_ROS

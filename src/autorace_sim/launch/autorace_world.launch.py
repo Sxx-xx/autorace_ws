@@ -23,11 +23,11 @@ from launch import LaunchDescription
 from launch.actions import AppendEnvironmentVariable
 from launch.actions import DeclareLaunchArgument
 from launch.actions import IncludeLaunchDescription
+from launch.actions import OpaqueFunction
 from launch.actions import SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 import yaml
 
@@ -51,7 +51,7 @@ def generate_launch_description():
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     gui = LaunchConfiguration('gui')
-    world = PathJoinSubstitution([pkg_sim, 'worlds', 'autorace_course.sdf'])
+    world = os.path.join(pkg_sim, 'worlds', 'autorace_course.sdf')
 
     robot_sdf = os.path.join(pkg_sim, 'models', ROBOT_SDF_MODEL, 'model.sdf')
     bridge_config = os.path.join(pkg_sim, 'params', 'autorace_bridge.yaml')
@@ -60,6 +60,11 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('gui', default_value='true',
                               description='Run the Gazebo GUI as well as the server.'),
+        # Faster than real time, for tests: the nodes run on simulated time,
+        # but their work still takes real time, so too high a factor leaves
+        # the cameras' pictures unprocessed. 0 is as fast as the machine can.
+        DeclareLaunchArgument('rtf', default_value='1.0',
+                              description='Real time factor of the simulation.'),
         # On the start line, facing the lights.
         DeclareLaunchArgument('x_pose', default_value=str(start['x'])),
         DeclareLaunchArgument('y_pose', default_value=str(start['y'])),
@@ -74,13 +79,24 @@ def generate_launch_description():
         'GZ_SIM_RESOURCE_PATH', os.path.join(pkg_tb3_gazebo, 'models')
     )
 
-    gz_server = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')
-        ),
-        launch_arguments={'gz_args': ['-r -s -v2 ', world],
-                          'on_exit_shutdown': 'true'}.items()
-    )
+    def gz_server(context):
+        # The factor lives in the world file; a copy carries the one asked for.
+        rtf = float(LaunchConfiguration('rtf').perform(context))
+        world_file = world
+        if rtf != 1.0:
+            with open(world) as f:
+                sdf = f.read()
+            world_file = os.path.join('/tmp', f'autorace_course_rtf{rtf:g}.sdf')
+            with open(world_file, 'w') as f:
+                f.write(sdf.replace('<real_time_factor>1.0</real_time_factor>',
+                                    f'<real_time_factor>{rtf}</real_time_factor>'))
+        return [IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')
+            ),
+            launch_arguments={'gz_args': f'-r -s -v2 {world_file}',
+                              'on_exit_shutdown': 'true'}.items()
+        )]
 
     gz_client = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -160,7 +176,7 @@ def generate_launch_description():
             set_model_env,
             set_resources,
             set_tb3_resources,
-            gz_server,
+            OpaqueFunction(function=gz_server),
             gz_client,
             robot_state_publisher,
             spawn_robot,
