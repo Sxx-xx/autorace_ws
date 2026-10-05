@@ -22,7 +22,7 @@ intersection_mission:
 
 construction_mission:
   ros__parameters:
-    speed: 0.138
+    speed: 0.16
     lookahead: 0.11
     robot_radius: 0.095
     comfort_clearance: 0.20
@@ -32,9 +32,10 @@ parking_mission:
   ros__parameters:
     bay_station: 0.24
     bay_depth: 0.29
-    speed: 0.11
-    approach_speed: 0.165
-    park_time: 1.0
+    speed: 0.16
+    approach_speed: 0.20
+    turn_rate: 1.5
+    park_time: 0.3
 
 level_crossing_mission:
   ros__parameters:
@@ -42,12 +43,14 @@ level_crossing_mission:
     stop_gap: 0.12
     # Gentle into the stop, so as not to run on past it.
     hold_gain: 0.6
-    hold_speed: 0.138
-    creep_speed: 0.069
+    hold_speed: 0.15
+    creep_speed: 0.07
+    open_scans: 3
 
 tunnel_mission:
   ros__parameters:
     inside: 1.86
     entrance_right: 0.18
     exit_x: 1.68
-    speed: 0.165
+    speed: 0.22
+    cornering_rate: 1.0
