@@ -230,6 +230,9 @@ class ConstructionMission(Node):
         # the last obstacle is this far behind the axle.
         self.declare_parameter('clear_distance', 0.60)
         self.declare_parameter('rear_clearance', 0.13)
+        # Standing cells in the road count as an obstacle only in a cluster
+        # of at least this many (after joining neighbours).
+        self.declare_parameter('cluster_cells', 12)
         # After the last obstacle, driven at most this far looking for a lane.
         self.declare_parameter('leave_distance', 0.4)
         # Without an obstacle after this much road the mission gives up.
@@ -261,6 +264,7 @@ class ConstructionMission(Node):
         self.lookahead = value('lookahead')
         self.clear_distance = value('clear_distance')
         self.rear_clearance = value('rear_clearance')
+        self.cluster_cells = value('cluster_cells')
         self.leave_distance = value('leave_distance')
         self.approach_limit = value('approach_limit')
         self.active_timeout = value('active_timeout')
@@ -620,7 +624,19 @@ class ConstructionMission(Node):
             left, right = 0.35, -0.35
         standing = ((along > -self.rear_clearance) & (along < self.clear_distance)
                     & (across > right + 0.01) & (across < left - 0.01))
-        return np.count_nonzero(standing) < 3
+        if np.count_nonzero(standing) < 3:
+            return True
+        # A few cells scattered about are strays; an obstacle is a cluster.
+        length = self.clear_distance + self.rear_clearance
+        picture = np.zeros((int(1.4 / 0.02) + 2, int(length / 0.02) + 2), np.uint8)
+        column = np.int_((along[standing] + self.rear_clearance) / 0.02)
+        row = np.int_((across[standing] + 0.7) / 0.02)
+        inside = ((row >= 0) & (row < picture.shape[0])
+                  & (column >= 0) & (column < picture.shape[1]))
+        picture[row[inside], column[inside]] = 1
+        picture = cv2.dilate(picture, np.ones((3, 3), np.uint8))
+        _, _, stats, _ = cv2.connectedComponentsWithStats(picture)
+        return not (stats[1:, cv2.CC_STAT_AREA] >= self.cluster_cells).any()
 
     # --- driving ---------------------------------------------------------
 

@@ -26,13 +26,19 @@ BOARD_Y = (53, 361)
 SIZE = 2000  # texture pixels for 4 m: 2 mm per pixel
 
 FLOOR, ROAD, YELLOW, WHITE, STOP = range(5)
+# The drawing has a light grey floor round the road; the venue (see
+# wkrsus.png, 2022) is black all over, so the floor is painted like the road.
 COLOURS = {  # BGR
-    FLOOR: (204, 204, 204),
+    FLOOR: (20, 20, 20),
     ROAD: (20, 20, 20),
     YELLOW: (0, 215, 255),
     WHITE: (250, 250, 250),
     STOP: (30, 30, 230),
 }
+
+# The white lines are one map pixel wide and come out some 12 mm; the tape
+# on the course is wider. Grown by this many texture pixels each side.
+WHITE_GROWTH = 4
 
 # The stop line across the top road, where the robot waits for the traffic
 # light: map pixels (inclusive), as drawn.
@@ -189,6 +195,11 @@ def main():
     scores[WHITE] *= 1.35
     scores[STOP] *= 1.35
     classes = np.argmax(np.stack(scores), axis=0)
+    if WHITE_GROWTH:
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * WHITE_GROWTH + 1, 2 * WHITE_GROWTH + 1))
+        grown = cv2.dilate((classes == WHITE).astype(np.uint8), kernel) > 0
+        classes[grown & ((classes == FLOOR) | (classes == ROAD))] = WHITE
 
     texture = np.zeros((SIZE, SIZE, 3), np.uint8)
     for k, colour in COLOURS.items():
