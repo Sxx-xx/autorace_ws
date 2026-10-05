@@ -84,6 +84,10 @@ class MissionManager(Node):
         self.declare_parameter('auto_start', False)
         self.declare_parameter('green_streak', 5)
         self.declare_parameter('sign_streak', 3)
+        # A sign seen while another mission is busy is kept this long, and
+        # taken as soon as that mission is over: the parking sign stands by
+        # the end of the construction zone.
+        self.declare_parameter('sign_memory', 10.0)
         self.declare_parameter('standby_timeout', 90.0)
         self.declare_parameter('mission_timeout.intersection', 45.0)
         self.declare_parameter('mission_timeout.construction', 60.0)
@@ -94,6 +98,7 @@ class MissionManager(Node):
 
         self.green_streak = self.get_parameter('green_streak').value
         self.sign_streak = self.get_parameter('sign_streak').value
+        self.sign_memory = self.get_parameter('sign_memory').value
         self.standby_timeout = self.get_parameter('standby_timeout').value
         self.enabled = set(self.get_parameter('enabled_missions').value)
         self.timeouts = {
@@ -106,6 +111,7 @@ class MissionManager(Node):
         self.run_start = None
         self.state_start = self.now()
         self.green_count = 0
+        self.pending = None         # (mission, reason, when) seen while busy
 
         self.pub_state = self.create_publisher(MissionState, '/autorace/mission_state', 1)
         self.pub_run_active = self.create_publisher(Bool, '/autorace/run_active', 1)
@@ -186,10 +192,12 @@ class MissionManager(Node):
             return
         if mission not in self.enabled:
             return
-        if self.state != MissionState.LANE_DRIVE:
-            # Already busy, or not running yet.
-            return
         if mission in self.completed:
+            return
+        if self.state != MissionState.LANE_DRIVE:
+            # Not running yet, or busy: remember a sign for afterwards.
+            if self.state != MissionState.STANDBY and reason.startswith('sign:'):
+                self.pending = (mission, reason, self.now())
             return
         self.get_logger().info(f'Entering mission {mission} ({reason}).')
         self.set_mission_active(mission, True)
@@ -200,6 +208,11 @@ class MissionManager(Node):
         self.completed.add(mission)
         detail = f'{mission} timeout' if timed_out else f'{mission} done'
         self.transition(MissionState.LANE_DRIVE, detail)
+        if self.pending is not None:
+            next_mission, reason, when = self.pending
+            self.pending = None
+            if self.now() - when < self.sign_memory:
+                self.request_mission(next_mission, f'{reason} (seen during {mission})')
 
     def transition(self, state, detail):
         if state != self.state:
