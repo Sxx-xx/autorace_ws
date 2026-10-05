@@ -121,7 +121,8 @@ class TunnelMission(Node):
         self.declare_parameter('opening_width', 0.34)
         # Wall ends this near on both sides, up to this far ahead, with at
         # least this share of the beams within 60 degrees of straight ahead
-        # returning from within 2.5 m, mean the entrance.
+        # returning from within 2.5 m (and 60 % of the whole front half),
+        # mean the entrance.
         self.declare_parameter('doorway_half_width', 0.22)
         self.declare_parameter('doorway_ahead', 0.30)
         self.declare_parameter('enclosed_fraction', 0.7)
@@ -372,8 +373,11 @@ class TunnelMission(Node):
         left = points[beside & (points[:, 1] > 0.08) & (points[:, 1] < self.doorway)]
         right = points[beside & (points[:, 1] < -0.08) & (points[:, 1] > -self.doorway)]
         sector = np.cos(angles) > 0.5
+        half = np.cos(angles) > 0.0
         enclosed = np.mean(seen[sector] & (ranges[sector] < 2.5))
-        if len(left) >= 3 and len(right) >= 3 and enclosed >= self.enclosed_fraction:
+        enclosed_half = np.mean(seen[half] & (ranges[half] < 2.5))
+        if (len(left) >= 3 and len(right) >= 3 and enclosed >= self.enclosed_fraction
+                and enclosed_half >= 0.6):
             self.doorway_count += 1
             self.doorway_sides = (float(np.median(left[:, 1])), float(-np.median(right[:, 1])))
             self.doorway_distance = float(np.median(np.concatenate([left[:, 0], right[:, 0]])))

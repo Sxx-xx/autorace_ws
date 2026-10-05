@@ -24,7 +24,11 @@ stop well short of it when it does, and go on when it has gone up again.
 
 The forward camera knows the bar by its stripes and says whether it is down
 (/detect/level_crossing). When it is, this node asks the mission manager for
-the mission and takes the robot off the lane follower.
+the mission and takes the robot off the lane follower. The camera loses the
+bar when the robot is within about 35 cm of it, and a bar that comes down
+only then is never seen down; so once the camera has seen the bar at all,
+down or up, anything the laser finds across the lane close ahead asks for
+the mission too.
 
 It then drives up to the bar and waits with its front `stop_gap` from it:
 just short of the second sensor, and no further back, since where the first
@@ -33,8 +37,11 @@ across the lane ahead. From further off the laser may miss the bar, which it
 catches by a centimetre; while the camera has the bar in its picture the bar
 is still some way off, and the robot keeps creeping up to it. Close to, the
 bar is above what the camera sees, so it is the laser that tells when the bar
-has gone up: the lane ahead has to be empty for a second before the robot
-goes on.
+has gone up: having seen the bar, it has to find the lane ahead empty for a
+second before the robot goes on. The lane was empty before the bar came down
+too, so a laser that has not yet seen the bar says nothing; should it never
+see it, the mission runs into the manager's timeout, which is slow but is
+not driving into the bar.
 """
 
 import math
@@ -52,6 +59,7 @@ from std_msgs.msg import UInt8
 
 
 # Bar state published by autorace_perception/detect_level_crossing.
+BAR_NONE = 0
 BAR_CLOSED = 2
 
 
@@ -62,6 +70,10 @@ class LevelCrossingMission(Node):
 
         # The bar has to be seen down in this many pictures in a row.
         self.declare_parameter('closed_streak', 2)
+        # Having seen the bar within this long, the laser finding something
+        # across the lane this near ahead starts the mission as well.
+        self.declare_parameter('bar_memory', 20.0)
+        self.declare_parameter('blocked_distance', 0.5)
         # Where to wait: the front of the robot this far from the bar. The
         # second sensor is 6 cm from the bar. The front is this far ahead of
         # the axle.
@@ -88,6 +100,8 @@ class LevelCrossingMission(Node):
             return self.get_parameter(name).value
 
         self.closed_streak = value('closed_streak')
+        self.bar_memory = value('bar_memory')
+        self.blocked_distance = value('blocked_distance')
         self.hold_distance = value('stop_gap') + value('robot_front')
         self.hold_tolerance = value('hold_tolerance')
         self.hold_gain = value('hold_gain')
@@ -105,12 +119,14 @@ class LevelCrossingMission(Node):
         self.closed_count = 0       # pictures in a row with the bar down
         self.open_count = 0         # and without
         self.picture_time = 0.0
+        self.bar_picture_time = -1e9   # when the camera last saw the bar at all
         self.bar_distance = None    # from the axle, by the laser
         self.bar_time = 0.0
         self.bar_travelled = 0.0    # distance travelled when it was measured
         self.position = None
         self.travelled = 0.0        # forwards counted positive, backwards negative
         self.empty_scans = 0        # scans in a row with nothing in the lane
+        self.bar_seen = False       # by the laser, since the mission began
         self.lane_target = None     # where the lane follower is steering for
         self.lane_time = 0.0
 
@@ -139,12 +155,18 @@ class LevelCrossingMission(Node):
                 self.get_logger().info('Level crossing: the bar is down, going up to it.')
                 self.phase = 'wait'
                 self.open_count = 0
+                # The lane was empty before the bar came down; only once
+                # the laser has seen the bar does its going count.
+                self.empty_scans = 0
+                self.bar_seen = False
         elif self.phase is not None:
             self.get_logger().info(f'Level crossing: deactivated during {self.phase}.')
             self.phase = None
 
     def callback_bar(self, msg):
         self.picture_time = self.now()
+        if msg.data != BAR_NONE:
+            self.bar_picture_time = self.picture_time
         if msg.data == BAR_CLOSED:
             self.closed_count += 1
             self.open_count = 0
@@ -168,6 +190,11 @@ class LevelCrossingMission(Node):
             self.bar_time = self.now()
             self.bar_travelled = self.travelled
             self.empty_scans = 0
+            self.bar_seen = True
+            if (self.phase is None and self.bar_distance < self.blocked_distance
+                    and self.now() - self.bar_picture_time < self.bar_memory):
+                # The bar, by the laser, before the camera has it down.
+                self.pub_trigger.publish(String(data='level_crossing'))
         else:
             self.empty_scans += 1
 
@@ -198,7 +225,8 @@ class LevelCrossingMission(Node):
             self.pub_done.publish(Bool(data=True))
             return
 
-        if self.open_count >= self.open_pictures and self.empty_scans >= self.open_scans:
+        if (self.bar_seen and self.open_count >= self.open_pictures
+                and self.empty_scans >= self.open_scans):
             self.get_logger().info('Level crossing: the bar is up, going on.')
             self.phase = 'done'
             return
