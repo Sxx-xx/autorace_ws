@@ -64,8 +64,11 @@ TUNNEL_OBSTACLES = [
 ]
 
 # Construction: the three cyan blocks, 19-20 x 7 px = 0.24 x 0.09 m,
-# alternating across the double-width road on the left of the board.
-CONSTRUCTION_HEIGHT = 0.20  # the Burger's lidar scans at about 0.18 m
+# alternating across the double-width road on the left of the board. On the
+# course (wkrsus.png) they are tall posts in black and white bands, well
+# above the Burger's lidar at about 0.18 m.
+CONSTRUCTION_HEIGHT = 0.40
+CONSTRUCTION_BANDS = 4
 CONSTRUCTION = [
     (world(359.9, 249), (0.09, 0.234)),
     (world(339.6, 285), (0.09, 0.246)),
@@ -127,6 +130,35 @@ def box_model(name, xyz, size, colour, yaw=0.0):
             <specular>0.05 0.05 0.05 1</specular>
           </material>
         </visual>
+      </link>
+    </model>'''
+
+
+def post_model(name, xy, size, height, bands):
+    """A static post in black and white bands, one collision box."""
+    sx, sy = size
+    x, y = xy
+    band = height / bands
+    visuals = ''
+    for i in range(bands):
+        colour = 0.9 if i % 2 == 0 else 0.05
+        visuals += f'''
+        <visual name="band_{i}">
+          <pose>0 0 {band * (i + 0.5) - height / 2:.3f} 0 0 0</pose>
+          <geometry><box><size>{sx} {sy} {band:.3f}</size></box></geometry>
+          <material>
+            <ambient>{colour} {colour} {colour} 1</ambient>
+            <diffuse>{colour} {colour} {colour} 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>'''
+    return f'''    <model name="{name}">
+      <static>true</static>
+      <pose>{pose(x, y, height / 2)}</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>{sx} {sy} {height}</size></box></geometry>
+        </collision>{visuals}
       </link>
     </model>'''
 
@@ -295,9 +327,9 @@ def world_file():
         parts.append(include(model, model, pose(i, 0, -5)))
     parts.append(include('autorace_level_bar', 'autorace_level_bar',
                          pose(*BAR_ORIGIN, 0.0, BAR_YAW)))
-    for i, (xy, (sx, sy)) in enumerate(CONSTRUCTION):
-        parts.append(box_model(f'construction_{i + 1}', xy,
-                               (sx, sy, CONSTRUCTION_HEIGHT), 0.55))
+    for i, (xy, size) in enumerate(CONSTRUCTION):
+        parts.append(post_model(f'construction_{i + 1}', xy, size,
+                                CONSTRUCTION_HEIGHT, CONSTRUCTION_BANDS))
     parts.append(box_model('house_robot', PARKING_BAYS[HOUSE_BAY], HOUSE_SIZE, 0.2))
     # Sensor 1 green, sensor 2 red; sim_level_crossing moves the first one.
     parts.append(marker_model('crossing_sensor_1', SENSOR1, 0.04, (0.0, 0.9, 0.2)))
