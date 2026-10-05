@@ -67,6 +67,7 @@ from sensor_msgs.msg import LaserScan
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Bool
+from std_msgs.msg import Float64
 from std_msgs.msg import String
 
 
@@ -86,6 +87,8 @@ class ParkingMission(Node):
         # and how far from the middle of the aisle the axle goes into a bay:
         # past the middle of the bay, as most of the robot is behind its axle.
         self.declare_parameter('bay_station', 0.24)
+        # From a line of the aisle, or of the lane up to it, to its middle.
+        self.declare_parameter('aisle_half_width', 0.12)
         self.declare_parameter('bay_depth', 0.29)
         # The arc into the bay, and how far short of the middle of the aisle
         # the robot stops backing out to turn.
@@ -103,6 +106,11 @@ class ParkingMission(Node):
         self.declare_parameter('default_bay', 'left')
         self.declare_parameter('lidar_offset', -0.032)
         self.declare_parameter('speed', 0.08)
+        # The lane follower is held to this on the way up to the lot and
+        # back down to the road: it arrives steadily, and the reckoning
+        # inside starts from a robot that is not still pitching from a
+        # sudden slowing.
+        self.declare_parameter('approach_speed', 0.12)
         self.declare_parameter('turn_rate', 0.8)
         self.declare_parameter('park_time', 1.0)
         # The mission is over when the robot is heading along the road again,
@@ -117,6 +125,7 @@ class ParkingMission(Node):
         self.white_free_distance = value('white_free_distance')
         self.white_min_points = value('white_min_points')
         self.bay_station = value('bay_station')
+        self.aisle_half_width = value('aisle_half_width')
         self.bay_depth = value('bay_depth')
         self.swing_radius = value('swing_radius')
         self.turn_offset = value('turn_offset')
@@ -127,6 +136,7 @@ class ParkingMission(Node):
         self.default_bay = value('default_bay')
         self.lidar_offset = value('lidar_offset')
         self.speed = value('speed')
+        self.approach_speed = value('approach_speed')
         self.turn_rate = value('turn_rate')
         self.park_time = value('park_time')
         self.exit_limit = value('exit_limit')
@@ -160,6 +170,7 @@ class ParkingMission(Node):
             PointCloud2, '/detect/lane_lines/white', self.callback_white, 1)
         self.pub_cmd_vel = self.create_publisher(Twist, '/cmd_vel/mission', 1)
         self.pub_follow = self.create_publisher(String, '/detect/lane_follow', 1)
+        self.pub_limit = self.create_publisher(Float64, '/control/max_vel', 1)
         self.pub_done = self.create_publisher(Bool, '/autorace/mission/parking/done', 1)
 
         self.create_timer(0.05, self.update)
@@ -263,18 +274,35 @@ class ParkingMission(Node):
         self.enter('aisle')
 
     def see_aisle(self, points, yaw):
-        """How far left of the middle of the aisle the camera shows the robot to be."""
-        left = points[points[:, 1] > 0.0]
-        right = points[points[:, 1] < 0.0]
-        if len(left) < 20 or len(right) < 20:
+        """How far left of the middle of the aisle the camera shows the robot to be.
+
+        Between the lines on both sides when both are in the picture; a
+        robot that has drifted to one side has only that side's line in
+        view, and the middle is then half an aisle from it. A line along the
+        aisle is narrow across the picture; the lot's outline runs across
+        the way out, wide, and is not a line to steer between.
+        """
+        def along_the_aisle(side):
+            return side if len(side) >= 20 and np.std(side[:, 1]) < 0.04 else side[:0]
+        left = along_the_aisle(points[points[:, 1] > 0.0])
+        right = along_the_aisle(points[points[:, 1] < 0.0])
+        if len(left) >= 20 and len(right) >= 20:
+            middle = float(np.median(left[:, 1]) + np.median(right[:, 1])) / 2.0
+        elif len(left) >= 20:
+            middle = float(np.median(left[:, 1])) - self.aisle_half_width
+        elif len(right) >= 20:
+            middle = float(np.median(right[:, 1])) + self.aisle_half_width
+        else:
             return
-        middle = float(np.median(left[:, 1]) + np.median(right[:, 1])) / 2.0
         # The lines are seen some way ahead; a robot not square to the aisle
         # sees them off to one side by that much.
         course = 0.0 if self.phase == 'aisle' else math.pi
         askew = wrap(yaw - self.lot[2] - course)
         ahead = float(np.median(points[:, 0]))
         self.aisle_seen = (-middle - ahead * math.tan(askew), self.now())
+        self.get_logger().info(
+            'Parking: aisle middle %+.3f m to the left by %d/%d points, askew %.2f.'
+            % (middle, len(left), len(right), askew), throttle_duration_sec=1.0)
 
     # --- driving ---------------------------------------------------------
 
@@ -335,6 +363,7 @@ class ParkingMission(Node):
             return
         if self.phase == 'turn_in':
             self.pub_follow.publish(String(data='left'))
+            self.pub_limit.publish(Float64(data=self.approach_speed))
             return
 
         along, across, heading = self.in_lot()
@@ -390,13 +419,18 @@ class ParkingMission(Node):
                 self.enter('leave')
 
         elif self.phase == 'leave':
-            twist = self.drive(heading, math.pi, self.in_aisle(-across), 1.0)
+            off_line = self.in_aisle(-across)
+            self.get_logger().info(
+                'Parking: leaving, %+.3f m left of the middle (odometry %+.3f).'
+                % (off_line, -across), throttle_duration_sec=1.0)
+            twist = self.drive(heading, math.pi, off_line, 1.0)
             if along <= self.leave_station:
                 self.get_logger().info('Parking: out of the lot, keeping left for the road.')
                 self.enter('exit')
 
         if self.phase == 'exit':
             self.pub_follow.publish(String(data='left'))
+            self.pub_limit.publish(Float64(data=self.approach_speed))
             # The road runs a quarter turn to the right of the lane up to
             # the lot.
             on_the_road = abs(wrap(heading + math.pi / 2.0)) < 0.35 and travelled > 0.4

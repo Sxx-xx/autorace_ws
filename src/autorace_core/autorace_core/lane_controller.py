@@ -56,6 +56,8 @@ class LaneController(Node):
         self.declare_parameter('recovery_angular', 0.45)
         self.declare_parameter('recovery_timeout', 8.0)
         self.declare_parameter('follow_timeout', 0.5)
+        # A speed limit on /control/max_vel holds only while it keeps coming.
+        self.declare_parameter('limit_timeout', 0.5)
         self.declare_parameter('publish_rate', 20.0)
 
         self.max_speed = self.get_parameter('max_speed').value
@@ -68,6 +70,7 @@ class LaneController(Node):
         self.recovery_angular = self.get_parameter('recovery_angular').value
         self.recovery_timeout = self.get_parameter('recovery_timeout').value
         self.follow_timeout = self.get_parameter('follow_timeout').value
+        self.limit_timeout = self.get_parameter('limit_timeout').value
         rate = self.get_parameter('publish_rate').value
 
         self.create_subscription(PointStamped, '/detect/lane_target', self.callback_target, 1)
@@ -82,6 +85,8 @@ class LaneController(Node):
         self.lane_state = 0
         self.follow = None
         self.follow_time = 0.0
+        self.limit = None           # a mission's speed limit, and when it last came
+        self.limit_time = 0.0
         self.recovering_since = None
 
         self.create_timer(1.0 / rate, self.update)
@@ -94,7 +99,9 @@ class LaneController(Node):
         self.target_time = self.now()
 
     def callback_max_vel(self, msg):
-        self.max_speed = msg.data
+        """Take a mission's speed limit; it holds for as long as it keeps coming."""
+        self.limit = msg.data
+        self.limit_time = self.now()
 
     def callback_state(self, msg):
         self.lane_state = msg.data
@@ -116,6 +123,8 @@ class LaneController(Node):
             curvature = self.pursuit_gain * 2.0 * left / (ahead * ahead + left * left)
 
             speed = self.max_speed
+            if self.limit is not None and now - self.limit_time < self.limit_timeout:
+                speed = min(speed, self.limit)
             if abs(curvature) * speed > self.cornering_rate:
                 speed = max(self.min_speed, self.cornering_rate / abs(curvature))
             angular = speed * curvature
