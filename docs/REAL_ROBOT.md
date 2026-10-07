@@ -32,7 +32,7 @@
 
 ## 처음 한 번
 
-**Pi**
+**Pi** (자세한 순서는 [PI_SETUP.md](PI_SETUP.md))
 1. Ubuntu 24.04 + ROS 2 Jazzy, `turtlebot3_bringup`, `usb_cam`, `image_transport_plugins`(compressed) 설치.
    OpenCR 펌웨어는 ROBOTIS 매뉴얼대로 (burger).
 2. 이 저장소를 Pi 에도 두고 `autorace_bringup` 만 빌드한다
