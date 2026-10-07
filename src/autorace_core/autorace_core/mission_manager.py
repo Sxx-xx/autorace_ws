@@ -94,13 +94,16 @@ class MissionManager(Node):
         self.declare_parameter('mission_timeout.parking', 60.0)
         self.declare_parameter('mission_timeout.level_crossing', 45.0)
         self.declare_parameter('mission_timeout.tunnel', 90.0)
-        self.declare_parameter('enabled_missions', list(MISSIONS.keys()))
+        # Comma-separated; empty for all of them. A section test runs with
+        # the one mission of its section, so the others' signs are let be.
+        self.declare_parameter('enabled_missions', '')
 
         self.green_streak = self.get_parameter('green_streak').value
         self.sign_streak = self.get_parameter('sign_streak').value
         self.sign_memory = self.get_parameter('sign_memory').value
         self.standby_timeout = self.get_parameter('standby_timeout').value
-        self.enabled = set(self.get_parameter('enabled_missions').value)
+        enabled = self.get_parameter('enabled_missions').value.replace(' ', '')
+        self.enabled = set(enabled.split(',')) if enabled else set(MISSIONS.keys())
         self.timeouts = {
             name: self.get_parameter(f'mission_timeout.{name}').value for name in MISSIONS
         }

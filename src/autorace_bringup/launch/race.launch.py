@@ -46,6 +46,8 @@ def generate_launch_description():
         # true starts the run at once instead of waiting at the stop line
         # for the green light.
         DeclareLaunchArgument('auto_start', default_value='false'),
+        # Comma-separated missions to run; empty for all. For section tests.
+        DeclareLaunchArgument('missions', default_value=''),
         # The forward camera; the lane camera looks at the road.
         DeclareLaunchArgument('sign_camera_topic', default_value='/camera/image_raw'),
     ]
@@ -102,7 +104,8 @@ def generate_launch_description():
         output='screen',
         parameters=[
             params, sim_time,
-            {'auto_start': ParameterValue(auto_start, value_type=bool)},
+            {'auto_start': ParameterValue(auto_start, value_type=bool),
+             'enabled_missions': ParameterValue(LaunchConfiguration('missions'), value_type=str)},
         ],
     )
 
