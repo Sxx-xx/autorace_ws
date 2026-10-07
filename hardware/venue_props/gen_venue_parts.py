@@ -260,6 +260,7 @@ def ctrl_box_lid():
 # ================================================================ C. 차단바
 # 시뮬: 기둥 30 × 30 × 220, 힌지 높이 200, 바 300 × 20 × 50. 로봇 라이다 171 mm.
 # 실물: 바가 내려오면 155…205 mm를 가린다 (허브의 소켓이 힌지보다 20 mm 아래).
+# 기둥 212 는 150 mm 베드(큐비콘 스타일 플러스-A15)에 안 들어가 두 토막으로 나눈다.
 LC_POST = (30.0, 26.0, 212.0)
 LC_WALL = 2.4
 HINGE_Z = 200.0
@@ -270,7 +271,12 @@ SOCK_IN = (BAR_H - 2 * BAR_WALL, BAR_T - 2 * BAR_WALL)          # 46.8 × 8.8
 TONGUE = (SOCK_IN[0] - 2 * CLEAR, SOCK_IN[1] - 2 * CLEAR)      # 46.2 × 8.2
 
 
-def lc_post():
+LC_SPLIT = 100.0     # 기둥을 두 토막으로 나누는 높이 (150 mm 베드: 아래 100+플러그 20, 위 112)
+LC_PLUG_H = 20.0
+
+
+def lc_post_top():
+    """기둥 윗토막 z = LC_SPLIT…212 (서보 포켓). 내보내기는 바닥 z = 0."""
     lx, ly, lz = LC_POST
     post = rect_tube(lx, ly, lz, LC_WALL, 0, 0, 0, roof=LC_WALL)
     # 서보 포켓: +y 벽, 몸통 세로, 축이 +y 를 향한다. 축 중심 z = HINGE_Z
@@ -280,20 +286,35 @@ def lc_post():
     z_mid = z_top - 22.5 / 2
     tabs = [cyl(M2_TAP / 2, LC_WALL + 2, 0, ly / 2 - LC_WALL - 1, z_mid + s * SG90['tab_pitch'] / 2, axis='y')
             for s in (-1, 1)]
+    pin = cyl(PIN_D / 2, ly + 2, 0, -ly / 2 - 1, LC_SPLIT + LC_PLUG_H / 2, axis='y')  # 이음 핀
+    top = cut(post, pocket, pin, *tabs)
+    top = top.cut(box(lx + 2, ly + 2, LC_SPLIT + 1, 0, 0, -1, cx=True, cy=True))
+    top.translate(App.Vector(0, 0, -LC_SPLIT))
+    return top
+
+
+def lc_post_base():
+    """기둥 아랫토막 z = 0…LC_SPLIT, 위에 윗토막 속으로 들어가는 플러그."""
+    lx, ly, _ = LC_POST
+    post = rect_tube(lx, ly, LC_SPLIT, LC_WALL, 0, 0, 0)
+    plug = rect_tube(lx - 2 * LC_WALL - 2 * CLEAR, ly - 2 * LC_WALL - 2 * CLEAR,
+                     LC_PLUG_H, LC_WALL, 0, 0, LC_SPLIT)
+    post = post.fuse(plug)
     # 바닥 옆 배선 슬롯 (-y 벽), 발판을 안 쓸 때
     slot = box(8.0, LC_WALL + 2, 10.0, 0, -ly / 2 - 1, -1, cx=True)
-    return cut(post, pocket, slot, *tabs)
+    pin = cyl(PIN_D / 2, ly + 2, 0, -ly / 2 - 1, LC_SPLIT + LC_PLUG_H / 2, axis='y')
+    return cut(post, slot, pin)
 
 
 def lc_foot():
     T = 6.0
-    plate = box(160.0, 100.0, T, -60.0, -50.0, 0)             # 기둥 중심이 (0,0), +x 가 도로 쪽
+    plate = box(148.0, 100.0, T, -50.0, -50.0, 0)             # 기둥 중심이 (0,0), +x 가 도로 쪽 (148: 150 베드)
     rim = rect_tube(LC_POST[0] + 2 * CLEAR + 2 * 2.4, LC_POST[1] + 2 * CLEAR + 2 * 2.4,
                     12.0, 2.4, 0, 0, T)
     plate = plate.fuse(rim)
     tools = [cyl(5.0, T + 2, 0, 0, -1),
-             box(60.0 + 1, 8.0, 3.0, -61.0, 0, -0.5, cy=True)]  # 밑면 홈 → -x 가장자리(박스 쪽)
-    for x in (-53, 93):
+             box(50.0 + 1, 8.0, 3.0, -51.0, 0, -0.5, cy=True)]  # 밑면 홈 → -x 가장자리(박스 쪽)
+    for x in (-43, 91):
         for y in (-43, 43):
             tools.append(cyl(M3_FREE / 2, T + 2, x, y, -1))
     return cut(plate, *tools)
@@ -444,8 +465,9 @@ def build():
     add('A6', 'tl_led_plate', 3, 'LED 판: 10 mm ×1 또는 5 mm ×3', tl_led_plate())
     add('B1', 'ctrl_box', 2, 'Arduino Mega 2560 박스 117×66×32, USB/DC 창, 케이블 홈 3', ctrl_box())
     add('B2', 'ctrl_box_lid', 2, '박스 뚜껑 (압입)', ctrl_box_lid())
-    add('C1', 'lc_post', 1, '차단바 기둥 30×26×212, 위에 SG90/MG90S 포켓, 속 빈 배선 통로', lc_post())
-    add('C2', 'lc_foot', 1, '차단바 발판 160×100×6, 기둥 소켓, 밑면 케이블 홈', lc_foot())
+    add('C1', 'lc_post_top', 1, '차단바 기둥 윗토막 30×26×112, SG90/MG90S 포켓, 속 빈 배선 통로', lc_post_top())
+    add('C9', 'lc_post_base', 1, '차단바 기둥 아랫토막 30×26×100 + 플러그 20, 핀으로 윗토막과 잇는다', lc_post_base())
+    add('C2', 'lc_foot', 1, '차단바 발판 148×100×6, 기둥 소켓, 밑면 케이블 홈', lc_foot())
     add('C3', 'lc_hub', 1, '서보 혼 허브, 양쪽 소켓(바/꼬리)', lc_hub())
     add('C4', 'lc_bar_segment', 5, '바 토막 50×12×50 + 장부, 흑/백 번갈아 출력', lc_bar_segment())
     add('C5', 'lc_bar_end', 1, '바 끝 토막 (막힌 끝)', lc_bar_segment(closed_end=True))
