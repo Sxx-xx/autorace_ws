@@ -8,3 +8,6 @@ src/turtlebot3_simulations/
 
 __pycache__/
 *.pyc
+
+# FreeCAD backup files
+*.FCBak
