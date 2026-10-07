@@ -74,8 +74,15 @@ BEV 의 축척이 몇 % 틀어져 차선 폭 판정이 흔들린다.
   `ssh dd@172.20.10.3 'setsid nohup ~/start_robot.sh > ~/robot.log 2>&1 < /dev/null & disown'`.
 - 움직임 확인 (PC 에서 Twist 0.05 m/s 3 s, 0.3 rad/s 2 s): 오도메트리 전진 15.5 cm(목표 15),
   회전 33.9°(목표 34). 배터리 11.3 V. `/odom` 은 Wi-Fi 로 20 Hz (로봇은 30 Hz 발행).
-- **라이다는 아직 `/scan` 이 안 나온다.** 드라이버는 /dev/ttyUSB0 을 열었다고 하고 오류는 없다.
-  LDS-01 인지 LDS-02 인지(LDS-02 면 `ld08_driver`, `LDS_MODEL=LDS-02`), 모터가 도는지 확인할 것.
+- **라이다는 LDS-01 이 아니다.** /dev/ttyUSB0(CP2102) 에서 **115200 baud** 로 LDRobot 계열
+  (LD06/LD08/LD14/LD19) 47 바이트 패킷(헤더 0x54 0x2C, 12 점, mm)이 나온다. 10 Hz 회전.
+  `hls_lfcd_lds_driver`(LDS-01) 도 apt 의 `ld08_driver`(230400 고정) 도 못 읽어서
+  `autorace_bringup/ld_lidar.py` 를 썼다 (`ros2 run autorace_bringup ld_lidar`, pyserial).
+  LDS-01 처럼 1° 360 칸 LaserScan 을 낸다. Pi 에는 `~/ld_lidar.py` + `~/start_lidar.sh`
+  (pid 는 `~/lidar.pid`) 로 떠 있다. PC 에서 10 Hz, 유효 215/360.
+  **앞 방향 기준(`angle_offset_deg`)과 회전 방향(`clockwise`)은 아직 안 맞췄다**: 로봇 앞
+  30 cm 에 물체를 두고 가장 가까운 칸이 0° 가 되게 offset 을 정한 뒤, 왼쪽에 둔 물체가 90°
+  (ROS 반시계) 에 오는지 확인할 것. 틀리면 공사·주차·터널 미션이 좌우를 거꾸로 본다.
 - 주의: Pi 에서 `pkill -f`/`pgrep -f` 패턴에 자기 명령줄이 걸리면 ssh 세션이 죽고, 띄운
   런치가 고아가 되어 두 개가 포트를 다툰다. 패턴은 `turtlebot3_ro[s]` 식으로 쓸 것.
 

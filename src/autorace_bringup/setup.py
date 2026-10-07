@@ -22,5 +22,6 @@ setup(
     maintainer_email='wjrhee0610@g.kmou.ac.kr',
     description='Top level launch files and tuned parameters for AutoRace 2023.',
     license='Apache-2.0',
-    entry_points={'console_scripts': []},
+    entry_points={'console_scripts': [
+            'ld_lidar = autorace_bringup.ld_lidar:main',]},
 )
