@@ -43,7 +43,9 @@ afresh from where the robot is every tenth of a second, and the robot steers
 for a point a little way along it.
 
     approach  the lane follower drives until an obstacle stands in the way
-    avoid     this node drives, until the road ahead is clear again
+    avoid     this node drives, until the road ahead is clear again; with the
+              obstacles behind it steers for the lane detector's point, which
+              allows for the road bending away at the end of the zone
 
 Nothing but the obstacles starts the mission: when one stands in the robot's
 way while it is lane following, this node asks the mission manager for the
@@ -295,6 +297,7 @@ class ConstructionMission(Node):
         self.lane_target = None     # where the lane follower is steering for
         self.lane_time = 0.0
         self.met = False            # an obstacle has been seen standing in the road
+        self.by_the_lane = False    # the obstacles passed, steering for the lane's point
 
         self.bridge = CvBridge()
 
@@ -330,6 +333,7 @@ class ConstructionMission(Node):
                 self.started_at = self.odometry[-1][4]
                 self.cleared_at = None
                 self.clear_count = 0
+                self.by_the_lane = False
                 self.road_found = False
                 self.edges = {'yellow': None, 'white': None}
                 self.walls = {'yellow': None, 'white': None}
@@ -677,7 +681,8 @@ class ConstructionMission(Node):
 
         # Clear means the obstacles have been passed, not that none has been
         # made out in the road yet.
-        if not self.road_is_clear(along, across):
+        clear = self.road_is_clear(along, across)
+        if not clear:
             self.met = True
             self.clear_count = 0
             self.cleared_at = None
@@ -695,6 +700,17 @@ class ConstructionMission(Node):
                 self.get_logger().info('Construction: road clear, done.')
                 self.phase = 'done'
                 return
+
+        # With the obstacles behind, the lane detector's point is the better
+        # guide: the road may be bending away at the end of the zone, and the
+        # straight-road picture lays the path on into the outer line there.
+        if self.met and clear and now - self.lane_time < 0.3:
+            if not self.by_the_lane:
+                self.get_logger().info('Construction: obstacles passed, steering by the lane.')
+                self.by_the_lane = True
+            self.pub_cmd_vel.publish(self.arc(*self.lane_target))
+            return
+        self.by_the_lane = False
 
         cost, blocked = self.road_cost(along, across)
         rows = lay_path(cost).astype(np.float64)
@@ -724,6 +740,11 @@ class ConstructionMission(Node):
             # Too far round to drive an arc to: turn on the spot first.
             twist.angular.z = math.copysign(self.cornering_rate, bearing)
             return twist
+        return self.arc(ahead, left)
+
+    def arc(self, ahead, left):
+        """Drive the arc from the axle, along the heading, through a point."""
+        twist = Twist()
         curvature = 2.0 * left / (ahead * ahead + left * left)
         speed = self.speed
         if abs(curvature) * speed > self.cornering_rate:
