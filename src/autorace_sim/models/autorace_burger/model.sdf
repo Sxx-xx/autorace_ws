@@ -312,6 +312,15 @@
           </sphere>
         </geometry>
         <surface>
+          <!-- A caster ball rolls; with the default friction (1.0) the sphere
+               drags, and at the exit of a hard bend it can catch and turn the
+               robot round itself while the wheels run straight. -->
+          <friction>
+            <ode>
+              <mu>0.0</mu>
+              <mu2>0.0</mu2>
+            </ode>
+          </friction>
           <contact>
             <ode>
               <soft_cfm>0</soft_cfm>
