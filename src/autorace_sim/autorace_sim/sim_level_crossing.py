@@ -89,7 +89,10 @@ class SimLevelCrossing(Node):
         self.declare_parameter('sensor2_x', 0.0)
         self.declare_parameter('sensor2_y', 0.0)
         self.declare_parameter('sensor2_radius', 0.08)
-        self.declare_parameter('closed_duration', 10.0)
+        # The bar is down this long after the close command (measured: 1.0 s),
+        # and stays down this long after that.
+        self.declare_parameter('closing_time', 1.0)
+        self.declare_parameter('closed_duration', 5.0)
         # Sensor 1 closes the bar once, and again only after the robot has
         # been this far away from it.
         self.declare_parameter('rearm_distance', 1.5)
@@ -108,6 +111,7 @@ class SimLevelCrossing(Node):
                               self.get_parameter('sensor1_distance_max').value)
         self.bar = (self.get_parameter('bar_x').value, self.get_parameter('bar_y').value)
         self.sensor2_radius = self.get_parameter('sensor2_radius').value
+        self.closing_time = self.get_parameter('closing_time').value
         self.closed_duration = self.get_parameter('closed_duration').value
         self.rearm_distance = self.get_parameter('rearm_distance').value
         self.sensor2 = (
@@ -133,6 +137,8 @@ class SimLevelCrossing(Node):
         self.triggered = False
         self.violation = False
         self.position = None
+        self.position_time = 0.0
+        self.speed = 0.0
         self.yaw = None
 
         self.mark_placed = True
@@ -180,6 +186,11 @@ class SimLevelCrossing(Node):
 
     def callback_truth(self, msg):
         self.truth_seen = True
+        now = self.now()
+        if self.position is not None and now > self.position_time:
+            self.speed = math.hypot(msg.position.x - self.position[0],
+                                    msg.position.y - self.position[1]) / (now - self.position_time)
+        self.position_time = now
         self.position = (msg.position.x, msg.position.y)
         q = msg.orientation
         self.yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
@@ -214,7 +225,9 @@ class SimLevelCrossing(Node):
         self.pub_bar.publish(Float64(data=angle))
 
     def update(self):
-        if not self.mark_placed:
+        # Moving a model jolts the robot's physics, so the mark is moved
+        # only while the robot stands still (SIM_NOTES: set_pose).
+        if not self.mark_placed and self.speed < 0.01:
             self.move_mark()
         if self.state == 'open':
             self.set_bar(ANGLE_OPEN)
@@ -240,7 +253,7 @@ class SimLevelCrossing(Node):
                 self.get_logger().error(
                     'Sensor 2 crossed while the bar is down: mission failed.'
                 )
-            if self.now() - self.closed_at > self.closed_duration:
+            if self.now() - self.closed_at > self.closing_time + self.closed_duration:
                 self.get_logger().info('Opening the bar.')
                 self.state = 'open'
 

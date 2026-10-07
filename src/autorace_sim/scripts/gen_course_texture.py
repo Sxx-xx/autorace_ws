@@ -40,7 +40,11 @@ COLOURS = {  # BGR
 # on the course is wider. Grown by this many texture pixels each side.
 WHITE_GROWTH = 4
 # Texture pixels: the 3 cm of tape the lane detector assumes (lane.line_width_m).
-LINE_WIDTH = 15
+# Off (0): with 3 cm lines the fork at the intersection lost the yellow line
+# of the left branch for a moment longer, and the robot took the right
+# branch in 2 laps of 4 (never in 37 with the 4 cm lines). On until the lane
+# detector keeps to the line it is told to follow across that gap.
+LINE_WIDTH = 0
 
 # The stop line across the top road, where the robot waits for the traffic
 # light: map pixels (inclusive), as drawn.
