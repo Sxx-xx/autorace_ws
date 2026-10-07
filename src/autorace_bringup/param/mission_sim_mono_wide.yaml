@@ -1,0 +1,73 @@
+---
+# Mission tuning for the simulated course with the wide single camera
+# (640x480, 90 deg): the forward detectors see things 1.37 times larger in
+# pixels than at 320x240 / 62 deg, so their pixel thresholds are scaled.
+mission_manager:
+  ros__parameters:
+    # Only the missions that have a node behind them (comma-separated; empty
+    # for all). A mission nobody answers for holds the state machine until
+    # it times out. race.launch.py's missions:= argument overrides this.
+    enabled_missions: 'intersection,construction,parking,level_crossing,tunnel'
+    mission_timeout:
+      # From the warning sign round the longer branch at bend speed.
+      intersection: 120.0
+      # From the sign: up the lane, in and out of a bay, and back to the road.
+      parking: 90.0
+
+traffic_light_mission:
+  ros__parameters:
+    stop_distance: 0.12
+
+intersection_mission:
+  ros__parameters:
+    sign_streak: 3
+    branch_distance: 2.0
+
+construction_mission:
+  ros__parameters:
+    speed: 0.16
+    lookahead: 0.11
+    robot_radius: 0.095
+    comfort_clearance: 0.20
+    line_slack: 0.01
+
+parking_mission:
+  ros__parameters:
+    bay_station: 0.24
+    bay_depth: 0.29
+    speed: 0.16
+    approach_speed: 0.20
+    turn_rate: 1.0
+    park_time: 0.0
+
+level_crossing_mission:
+  ros__parameters:
+    # Front of the robot to the bar while waiting; sensor 2 is at 0.06.
+    stop_gap: 0.12
+    # Gentle into the stop, so as not to run on past it.
+    hold_gain: 0.6
+    hold_speed: 0.15
+    creep_speed: 0.07
+    open_scans: 3
+
+tunnel_mission:
+  ros__parameters:
+    inside: 1.86
+    entrance_right: 0.18
+    exit_x: 1.68
+    speed: 0.20
+    cornering_rate: 1.0
+
+detect_sign:
+  ros__parameters:
+    min_area: 470         # 250 x 1.37^2
+
+detect_traffic_light:
+  ros__parameters:
+    min_area: 56          # 30 x 1.37^2
+
+detect_level_crossing:
+  ros__parameters:
+    stripe:
+      min_area: 75        # 40 x 1.37^2
+      min_thickness: 20   # the bar within 0.8 m; the 90 deg lens sees the open bar on the far road at 1.6 m as 15 px
