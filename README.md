@@ -70,11 +70,12 @@ ros2 launch autorace_bringup race.launch.py
 ros2 launch autorace_bringup race.launch.py missions:=parking,tunnel
 
 # 차선 주행만 (튜닝용)
-ros2 launch autorace_bringup lane_drive.launch.py profile:=sim use_sim_time:=true
+ros2 launch autorace_bringup lane_drive.launch.py
 ```
 
 `autorace_world.launch.py` 는 `camera:=dual|single|single_wide`, `gui:=false`, `rtf:=` 를
-받는다. 시뮬은 실제 로봇의 한계 그대로 달린다: 바퀴당 0.20 m/s, 회전 2.5 rad/s 이하.
+받는다. 카메라 한 대로 띄웠으면 미션도 그에 맞춰 띄운다:
+`race.launch.py perception:=sim_mono_wide mission:=sim_mono_wide` (90° 카메라). 시뮬은 실제 로봇의 한계 그대로 달린다: 바퀴당 0.20 m/s, 회전 2.5 rad/s 이하.
 Wayland 에서는 `QT_QPA_PLATFORM=xcb` 로 띄워야 화면이 보인다.
 운영 중 알게 된 것은 [docs/SIM_NOTES.md](docs/SIM_NOTES.md).
 
