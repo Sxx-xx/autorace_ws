@@ -102,7 +102,11 @@ def generate_launch_description():
     base = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(pkg_tb3, 'launch', 'robot.launch.py')),
         condition=IfCondition(LaunchConfiguration('base')),
-        launch_arguments={'usb_port': LaunchConfiguration('usb_port')}.items(),
+        launch_arguments={
+            'usb_port': LaunchConfiguration('usb_port'),
+            # /cmd_vel as plain Twist (the Jazzy default is TwistStamped).
+            'tb3_param_dir': os.path.join(pkg_bringup, 'param', 'tb3_burger.yaml'),
+        }.items(),
     )
 
     forward = camera('camera', LaunchConfiguration('forward_device'), 'camera_forward',
