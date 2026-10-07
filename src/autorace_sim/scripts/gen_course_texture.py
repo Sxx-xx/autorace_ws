@@ -39,6 +39,8 @@ COLOURS = {  # BGR
 # The white lines are one map pixel wide and come out some 12 mm; the tape
 # on the course is wider. Grown by this many texture pixels each side.
 WHITE_GROWTH = 4
+# Texture pixels: the 3 cm of tape the lane detector assumes (lane.line_width_m).
+LINE_WIDTH = 15
 
 # The stop line across the top road, where the robot waits for the traffic
 # light: map pixels (inclusive), as drawn.
@@ -201,6 +203,17 @@ def main():
         grown = cv2.dilate((classes == WHITE).astype(np.uint8), kernel) > 0
         classes[grown & ((classes == FLOOR) | (classes == ROAD))] = WHITE
 
+    if LINE_WIDTH:
+        # Favoured and grown so that they survive the upsampling, the lines
+        # come out 4-5 cm wide. Tape is 3 cm: redraw each line that wide
+        # along its centre line. Otherwise the zigzag lane, which the map
+        # draws a little narrower than the rest, is narrower than the robot.
+        disk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (LINE_WIDTH, LINE_WIDTH))
+        for k in (YELLOW, WHITE):
+            mask = (classes == k).astype(np.uint8) * 255
+            axis = cv2.ximgproc.thinning(mask)
+            line = cv2.dilate(axis, disk) > 0
+            classes[(classes == k) & ~line] = ROAD
     texture = np.zeros((SIZE, SIZE, 3), np.uint8)
     for k, colour in COLOURS.items():
         texture[classes == k] = colour
