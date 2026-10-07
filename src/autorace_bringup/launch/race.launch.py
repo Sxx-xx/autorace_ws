@@ -29,14 +29,17 @@ from launch.actions import DeclareLaunchArgument
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
     pkg_bringup = get_package_share_directory('autorace_bringup')
-    params = os.path.join(pkg_bringup, 'param', 'mission_sim.yaml')
-    perception_params = os.path.join(pkg_bringup, 'param', 'perception_sim.yaml')
+    params = PathJoinSubstitution(
+        [pkg_bringup, 'param', ['mission_', LaunchConfiguration('mission'), '.yaml']])
+    perception_params = PathJoinSubstitution(
+        [pkg_bringup, 'param', ['perception_', LaunchConfiguration('perception'), '.yaml']])
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     auto_start = LaunchConfiguration('auto_start')
@@ -50,6 +53,12 @@ def generate_launch_description():
         DeclareLaunchArgument('missions', default_value=''),
         # The forward camera; the lane camera looks at the road.
         DeclareLaunchArgument('sign_camera_topic', default_value='/camera/image_raw'),
+        DeclareLaunchArgument('lane_camera_topic', default_value='/camera_lane/image_raw'),
+        DeclareLaunchArgument('lane_camera_info_topic', default_value='/camera_lane/camera_info'),
+        # perception_<name>.yaml: sim (two cameras) or sim_mono (one camera).
+        DeclareLaunchArgument('perception', default_value='sim'),
+        # mission_<name>.yaml.
+        DeclareLaunchArgument('mission', default_value='sim'),
     ]
 
     sim_time = {'use_sim_time': use_sim_time}
@@ -58,7 +67,12 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_bringup, 'launch', 'lane_drive.launch.py')
         ),
-        launch_arguments={'use_sim_time': use_sim_time}.items()
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+            'perception': LaunchConfiguration('perception'),
+            'camera_topic': LaunchConfiguration('lane_camera_topic'),
+            'camera_info_topic': LaunchConfiguration('lane_camera_info_topic'),
+        }.items()
     )
 
     detect_sign = Node(

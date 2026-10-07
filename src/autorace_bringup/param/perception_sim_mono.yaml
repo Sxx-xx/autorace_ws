@@ -1,0 +1,80 @@
+---
+# Perception tuning for the single-camera robot (models/autorace_burger_mono):
+# one camera on the top plate, 0.15 m up, 15 deg down, feeding both the
+# bird's eye view and the sign/light detectors.
+#
+# The camera's bottom row looks 39 deg down, so the floor is visible from
+# 0.23 m ahead of the axle; the bird's eye view covers 0.24..0.49 m and the
+# controller steers for a point 0.30 m ahead instead of 0.16 m. The far rows
+# are stretched about six times, so lines there are coarse.
+bev_projector:
+  ros__parameters:
+    camera:
+      height: 0.15          # above the road surface
+      pitch: 0.26           # rad, nose down (15 deg)
+      forward_offset: 0.045
+    bev:
+      pixels_per_meter: 1200.0
+      width: 800
+      height: 300
+      near: 0.24            # the bottom row of the picture reaches 0.23 m
+    blur_kernel: 5
+
+detect_lane:
+  ros__parameters:
+    bev:
+      pixels_per_meter: 1200.0
+      near: 0.24
+    lane:
+      width_m: 0.25         # measured between the line centres on the course
+      # Further out, the robot starts turning before it reaches the bend and
+      # cuts the corner; with 2 cm to spare either side there is no room to.
+      control_lookahead: 0.30
+      # No bend on the course puts the lane centre further round than
+      # about 25 deg at that distance; the lone white line at the exit of
+      # a tight bend offered a point at 50-60 deg, which threw the robot
+      # over the line.
+      max_target_angle: 0.7
+    detect:
+      min_pixels: 2000
+      max_line_width_m: 0.08
+      auto_threshold: true
+      lane:
+        white:
+          hue_l: 0
+          hue_h: 179
+          saturation_l: 0
+          saturation_h: 70
+          lightness_l: 105
+          lightness_h: 255
+        yellow:
+          hue_l: 10
+          hue_h: 127
+          saturation_l: 70
+          saturation_h: 255
+          lightness_l: 95
+          lightness_h: 255
+    reliability:
+      step: 5
+    process_every_n: 2
+    hold_last_center_sec: 0.4
+
+detect_stop_line:
+  ros__parameters:
+    bev:
+      pixels_per_meter: 1200.0
+      near: 0.24
+
+lane_controller:
+  ros__parameters:
+    max_speed: 0.20
+    # The run starts on the stop line: no creeping up to it before the green.
+    standby_speed: 0.0
+    min_speed: 0.05
+    pursuit_gain: 1.0
+    max_angular: 2.0
+    cornering_rate: 0.825
+    lane_timeout: 0.5
+    recovery_speed: 0.05
+    recovery_angular: 0.45
+    recovery_timeout: 8.0

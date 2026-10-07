@@ -26,12 +26,14 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
+from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
     pkg_bringup = get_package_share_directory('autorace_bringup')
-    params = os.path.join(pkg_bringup, 'param', 'perception_sim.yaml')
+    params = PathJoinSubstitution(
+        [pkg_bringup, 'param', ['perception_', LaunchConfiguration('perception'), '.yaml']])
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     camera_topic = LaunchConfiguration('camera_topic')
@@ -39,6 +41,8 @@ def generate_launch_description():
 
     declare_args = [
         DeclareLaunchArgument('use_sim_time', default_value='true'),
+        # perception_<name>.yaml: sim (two cameras) or sim_mono (one camera).
+        DeclareLaunchArgument('perception', default_value='sim'),
         # The downward looking lane camera; the forward one is for signs.
         DeclareLaunchArgument('camera_topic', default_value='/camera_lane/image_raw'),
         DeclareLaunchArgument('camera_info_topic', default_value='/camera_lane/camera_info'),

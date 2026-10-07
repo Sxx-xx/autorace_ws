@@ -28,6 +28,8 @@ from launch.actions import SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch.substitutions import PathJoinSubstitution
+from launch.substitutions import PythonExpression
 from launch_ros.actions import Node
 import yaml
 
@@ -53,11 +55,19 @@ def generate_launch_description():
     gui = LaunchConfiguration('gui')
     world = os.path.join(pkg_sim, 'worlds', 'autorace_course.sdf')
 
-    robot_sdf = os.path.join(pkg_sim, 'models', ROBOT_SDF_MODEL, 'model.sdf')
+    # camera:=dual is the forward + lane camera robot; single has one camera
+    # on the top plate doing both (models/autorace_burger_mono).
+    robot_sdf = PathJoinSubstitution([
+        pkg_sim, 'models',
+        PythonExpression(["{'single': 'autorace_burger_mono', 'single_wide': 'autorace_burger_mono_wide'}.get('",
+                          LaunchConfiguration('camera'), "', 'autorace_burger')"]),
+        'model.sdf'])
     bridge_config = os.path.join(pkg_sim, 'params', 'autorace_bridge.yaml')
 
     declare_args = [
         DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument('camera', default_value='dual',
+                              description='dual: forward + lane camera; single: one 62 deg camera; single_wide: one 90 deg camera at 640x480'),
         DeclareLaunchArgument('gui', default_value='true',
                               description='Run the Gazebo GUI as well as the server.'),
         # Faster than real time, for tests: the nodes run on simulated time,
