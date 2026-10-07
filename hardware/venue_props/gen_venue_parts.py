@@ -469,7 +469,7 @@ def build():
     add('C9', 'lc_post_base', 1, '차단바 기둥 아랫토막 30×26×100 + 플러그 20, 핀으로 윗토막과 잇는다', lc_post_base())
     add('C2', 'lc_foot', 1, '차단바 발판 148×100×6, 기둥 소켓, 밑면 케이블 홈', lc_foot())
     add('C3', 'lc_hub', 1, '서보 혼 허브, 양쪽 소켓(바/꼬리)', lc_hub())
-    add('C4', 'lc_bar_segment', 5, '바 토막 50×12×50 + 장부, 흑/백 번갈아 출력', lc_bar_segment())
+    add('C4', 'lc_bar_segment', 5, '바 토막 50×12×50 + 장부, 빨강/흰색 번갈아 출력', lc_bar_segment())
     add('C5', 'lc_bar_end', 1, '바 끝 토막 (막힌 끝)', lc_bar_segment(closed_end=True))
     add('C6', 'lc_tail', 1, '균형추 꼬리 60 mm (동전/너트 넣고 끼움)', lc_bar_segment(60.0, closed_end=True))
     add('C7', 'lc_sensor_post_e18', 2, '센서 기둥: E18-D80NK(M18) 축 높이 40', lc_sensor_post('e18'))
