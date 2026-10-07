@@ -16,9 +16,12 @@
 
 """The race: lane following, sign detection, the mission manager and missions.
 
-Missions are added here as they are written; so far there are the traffic
-light, the intersection, the construction zone, parking, the level
-crossing and the tunnel.
+This runs on the PC. The robot runs robot.launch.py (drivers and cameras).
+
+profile:=real (default) reads param/mission_real.yaml and
+perception_real.yaml with wall time; profile:=sim reads the *_sim.yaml files
+(pass use_sim_time:=true as well). compressed:=true decodes the cameras'
+/compressed streams here so only JPEG frames cross the Wi-Fi.
 """
 
 import os
@@ -27,150 +30,95 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.actions import IncludeLaunchDescription
+from launch.actions import OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
+
+from autorace_bringup.launch_helpers import decoded_topic, republish
 
 
-def generate_launch_description():
+def launch_setup(context):
     pkg_bringup = get_package_share_directory('autorace_bringup')
-    params = os.path.join(pkg_bringup, 'param', 'mission_sim.yaml')
-    perception_params = os.path.join(pkg_bringup, 'param', 'perception_sim.yaml')
+    profile = LaunchConfiguration('profile').perform(context)
+    params = os.path.join(pkg_bringup, 'param', f'mission_{profile}.yaml')
+    perception_params = os.path.join(pkg_bringup, 'param', f'perception_{profile}.yaml')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
-    auto_start = LaunchConfiguration('auto_start')
-
-    declare_args = [
-        DeclareLaunchArgument('use_sim_time', default_value='true'),
-        # true starts the run at once instead of waiting at the stop line
-        # for the green light.
-        DeclareLaunchArgument('auto_start', default_value='false'),
-        # Comma-separated missions to run; empty for all. For section tests.
-        DeclareLaunchArgument('missions', default_value=''),
-        # The forward camera; the lane camera looks at the road.
-        DeclareLaunchArgument('sign_camera_topic', default_value='/camera/image_raw'),
-    ]
-
     sim_time = {'use_sim_time': use_sim_time}
+    auto_start = LaunchConfiguration('auto_start').perform(context).lower() == 'true'
+    missions = LaunchConfiguration('missions').perform(context).replace(' ', '')
+    compressed = LaunchConfiguration('compressed').perform(context).lower() == 'true'
+    sign_camera = LaunchConfiguration('sign_camera_topic').perform(context)
 
-    lane_drive = IncludeLaunchDescription(
+    nodes = []
+
+    nodes.append(IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_bringup, 'launch', 'lane_drive.launch.py')
         ),
-        launch_arguments={'use_sim_time': use_sim_time}.items()
-    )
+        launch_arguments={
+            'profile': profile,
+            'use_sim_time': use_sim_time,
+            'compressed': LaunchConfiguration('compressed'),
+            'camera_topic': LaunchConfiguration('lane_camera_topic'),
+            'camera_info_topic': LaunchConfiguration('lane_camera_info_topic'),
+        }.items()
+    ))
 
-    detect_sign = Node(
-        package='autorace_perception',
-        executable='detect_sign',
-        name='detect_sign',
-        output='screen',
-        parameters=[params, sim_time],
-        remappings=[('/detect/image_input', LaunchConfiguration('sign_camera_topic'))],
-    )
+    if compressed:
+        nodes.append(republish(sign_camera, use_sim_time, 'republish_forward'))
+        sign_camera = decoded_topic(sign_camera)
+    sign_input = [('/detect/image_input', sign_camera)]
 
-    detect_traffic_light = Node(
-        package='autorace_perception',
-        executable='detect_traffic_light',
-        name='detect_traffic_light',
-        output='screen',
-        parameters=[params, sim_time],
-        remappings=[('/detect/image_input', LaunchConfiguration('sign_camera_topic'))],
-    )
+    def perception(executable, remappings, param_file=params):
+        return Node(
+            package='autorace_perception', executable=executable, name=executable,
+            output='screen', parameters=[param_file, sim_time], remappings=remappings,
+        )
 
+    def mission(executable, extra=None):
+        return Node(
+            package='autorace_core', executable=executable, name=executable,
+            output='screen', parameters=[params, sim_time] + ([extra] if extra else []),
+        )
+
+    nodes.append(perception('detect_sign', sign_input))
+    nodes.append(perception('detect_traffic_light', sign_input))
     # The stop line is on the road, in the lane camera's bird's eye view.
-    detect_stop_line = Node(
-        package='autorace_perception',
-        executable='detect_stop_line',
-        name='detect_stop_line',
-        output='screen',
-        parameters=[perception_params, sim_time],
-        remappings=[('/detect/image_input', '/camera/image_projected')],
-    )
+    nodes.append(perception('detect_stop_line',
+                            [('/detect/image_input', '/camera/image_projected')],
+                            perception_params))
+    nodes.append(perception('detect_level_crossing', sign_input))
 
-    traffic_light_mission = Node(
-        package='autorace_core',
-        executable='traffic_light_mission',
-        name='traffic_light_mission',
-        output='screen',
-        parameters=[params, sim_time],
-    )
+    # missions:='' leaves the yaml's enabled_missions in force; a value
+    # overrides it (section tests).
+    manager_overrides = {'auto_start': auto_start}
+    if missions:
+        manager_overrides['enabled_missions'] = missions
+    nodes.append(mission('mission_manager', manager_overrides))
 
-    mission_manager = Node(
-        package='autorace_core',
-        executable='mission_manager',
-        name='mission_manager',
-        output='screen',
-        parameters=[
-            params, sim_time,
-            {'auto_start': ParameterValue(auto_start, value_type=bool),
-             'enabled_missions': ParameterValue(LaunchConfiguration('missions'), value_type=str)},
-        ],
-    )
+    for name in ('traffic_light_mission', 'intersection_mission', 'construction_mission',
+                 'parking_mission', 'level_crossing_mission', 'tunnel_mission'):
+        nodes.append(mission(name))
+    return nodes
 
-    intersection_mission = Node(
-        package='autorace_core',
-        executable='intersection_mission',
-        name='intersection_mission',
-        output='screen',
-        parameters=[params, sim_time],
-    )
 
-    construction_mission = Node(
-        package='autorace_core',
-        executable='construction_mission',
-        name='construction_mission',
-        output='screen',
-        parameters=[params, sim_time],
-    )
-
-    parking_mission = Node(
-        package='autorace_core',
-        executable='parking_mission',
-        name='parking_mission',
-        output='screen',
-        parameters=[params, sim_time],
-    )
-
-    detect_level_crossing = Node(
-        package='autorace_perception',
-        executable='detect_level_crossing',
-        name='detect_level_crossing',
-        output='screen',
-        parameters=[params, sim_time],
-        remappings=[('/detect/image_input', LaunchConfiguration('sign_camera_topic'))],
-    )
-
-    level_crossing_mission = Node(
-        package='autorace_core',
-        executable='level_crossing_mission',
-        name='level_crossing_mission',
-        output='screen',
-        parameters=[params, sim_time],
-    )
-
-    tunnel_mission = Node(
-        package='autorace_core',
-        executable='tunnel_mission',
-        name='tunnel_mission',
-        output='screen',
-        parameters=[params, sim_time],
-    )
-
-    return LaunchDescription(
-        declare_args + [
-            lane_drive,
-            detect_sign,
-            detect_traffic_light,
-            detect_stop_line,
-            mission_manager,
-            traffic_light_mission,
-            intersection_mission,
-            construction_mission,
-            parking_mission,
-            detect_level_crossing,
-            level_crossing_mission,
-            tunnel_mission,
-        ]
-    )
+def generate_launch_description():
+    declare_args = [
+        # real: wall clock and param/*_real.yaml. sim: *_sim.yaml.
+        DeclareLaunchArgument('profile', default_value='real'),
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
+        # true starts the run at once instead of waiting at the stop line
+        # for the green light.
+        DeclareLaunchArgument('auto_start', default_value='false'),
+        # Comma-separated missions to run; empty keeps the yaml's list.
+        DeclareLaunchArgument('missions', default_value=''),
+        # The forward camera (signs, light, bar) and the lane camera (road).
+        DeclareLaunchArgument('sign_camera_topic', default_value='/camera/image_raw'),
+        DeclareLaunchArgument('lane_camera_topic', default_value='/camera_lane/image_raw'),
+        DeclareLaunchArgument('lane_camera_info_topic', default_value='/camera_lane/camera_info'),
+        # true: subscribe to the cameras' /compressed streams and decode here.
+        DeclareLaunchArgument('compressed', default_value='true'),
+    ]
+    return LaunchDescription(declare_args + [OpaqueFunction(function=launch_setup)])

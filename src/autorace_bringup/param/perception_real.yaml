@@ -1,0 +1,108 @@
+---
+# Perception tuning for the real TurtleBot3 Burger.
+#
+# Copied from perception_sim.yaml. The course geometry (lane width, BEV scale)
+# is the same as the sim, which was built from the venue's map. What differs
+# on the robot is marked "MEASURE" (geometry of the real camera mount) or
+# "TUNE" (anything that depends on the real camera and lighting).
+#
+# The lane camera is the downward looking one (/camera_lane), not the forward
+# camera the sign detectors use. Mount it as in the sim: 0.22 m above the
+# floor, 0.030 m ahead of the wheel axle, nose down 1.05 rad (60 deg). If the
+# mount differs, measure it and change camera.* below; everything else in the
+# lane pipeline derives from camera_info and these three numbers.
+bev_projector:
+  ros__parameters:
+    camera:
+      height: 0.22          # MEASURE: lens centre above the floor (m)
+      pitch: 1.05           # MEASURE: rad nose down (60 deg)
+      forward_offset: 0.030 # MEASURE: lens ahead of the wheel axle (m)
+    bev:
+      pixels_per_meter: 1200.0
+      width: 800
+      height: 300
+      near: 0.07            # nearer than this the camera sees the robot itself
+    blur_kernel: 5
+
+detect_lane:
+  ros__parameters:
+    bev:
+      pixels_per_meter: 1200.0
+      near: 0.07
+    lane:
+      width_m: 0.25         # measured between the line centres on the course
+      control_lookahead: 0.16
+      max_target_angle: 0.7
+    detect:
+      min_pixels: 2000
+      max_line_width_m: 0.08
+      # TUNE: auto_threshold adapts the white threshold to the picture; keep
+      # it on. The HSV bounds below are the sim's; check them with
+      # /detect/image_lane on the real floor (black Formex is glossy).
+      auto_threshold: true
+      lane:
+        white:
+          hue_l: 0
+          hue_h: 179
+          saturation_l: 0
+          saturation_h: 70
+          lightness_l: 105
+          lightness_h: 255
+        yellow:
+          hue_l: 10
+          hue_h: 127
+          saturation_l: 70
+          saturation_h: 255
+          lightness_l: 95
+          lightness_h: 255
+    reliability:
+      step: 5
+    # The sim camera ran at 30 fps; over Wi-Fi the real one may not. Process
+    # every frame and let the PC do the work.
+    process_every_n: 1
+    hold_last_center_sec: 0.4
+
+detect_stop_line:
+  ros__parameters:
+    bev:
+      pixels_per_meter: 1200.0
+      near: 0.07
+    red:
+      hue_margin: 10      # TUNE
+      saturation_l: 120
+      value_l: 80
+    min_width_m: 0.10
+
+lane_controller:
+  ros__parameters:
+    # The motors do 0.211 m/s unloaded and less under load; 0.18 leaves the
+    # outer wheel room to turn at speed. Raise towards 0.20 once the lane
+    # following is clean on the real floor.
+    max_speed: 0.18
+    min_speed: 0.05
+    pursuit_gain: 1.0
+    max_angular: 2.0
+    cornering_rate: 0.825
+    lane_timeout: 0.5
+    recovery_speed: 0.05
+    recovery_angular: 0.45
+    recovery_timeout: 8.0
+
+cmd_vel_mux:
+  ros__parameters:
+    input_timeout: 0.3
+    publish_rate: 50.0
+    stall_timeout: 20.0
+    creep_timeout: 25.0
+    creep_speed: 0.05
+    # Wedged-robot detection from the laser. TUNE on the real LDS: stand the
+    # robot still, run tools/check_robot.sh and read the scan noise; the
+    # threshold must be well clear of it. The sim's noise was 1 cm.
+    blocked_timeout: 3.0
+    unstick_duration: 1.5
+    unstick_speed: -0.07
+    scan_change_threshold: 0.05
+    scan_moved_share: 0.05
+    # Burger: motors 0.211 m/s unloaded, wheels 0.160 m apart.
+    wheel_speed: 0.20
+    wheel_separation: 0.160

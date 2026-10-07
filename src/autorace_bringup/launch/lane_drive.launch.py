@@ -18,6 +18,11 @@
 
 This is the baseline every mission falls back to, so it is also the launch
 file to use when tuning the controller.
+
+profile:=real (default) reads param/perception_real.yaml and wall time;
+profile:=sim reads perception_sim.yaml (pass use_sim_time:=true as well).
+compressed:=true takes the camera as <camera_topic>/compressed and decodes it
+here, on the PC, so only JPEG frames cross the Wi-Fi from the robot.
 """
 
 import os
@@ -25,28 +30,30 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.actions import OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+from autorace_bringup.launch_helpers import decoded_topic, republish
 
-def generate_launch_description():
+
+def launch_setup(context):
     pkg_bringup = get_package_share_directory('autorace_bringup')
-    params = os.path.join(pkg_bringup, 'param', 'perception_sim.yaml')
+    profile = LaunchConfiguration('profile').perform(context)
+    params = os.path.join(pkg_bringup, 'param', f'perception_{profile}.yaml')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
-    camera_topic = LaunchConfiguration('camera_topic')
-    camera_info_topic = LaunchConfiguration('camera_info_topic')
-
-    declare_args = [
-        DeclareLaunchArgument('use_sim_time', default_value='true'),
-        # The downward looking lane camera; the forward one is for signs.
-        DeclareLaunchArgument('camera_topic', default_value='/camera_lane/image_raw'),
-        DeclareLaunchArgument('camera_info_topic', default_value='/camera_lane/camera_info'),
-    ]
-
     sim_time = {'use_sim_time': use_sim_time}
+    compressed = LaunchConfiguration('compressed').perform(context).lower() == 'true'
+    camera_topic = LaunchConfiguration('camera_topic').perform(context)
+    camera_info_topic = LaunchConfiguration('camera_info_topic').perform(context)
 
-    bev_projector = Node(
+    nodes = []
+    if compressed:
+        nodes.append(republish(camera_topic, use_sim_time, 'republish_lane'))
+        camera_topic = decoded_topic(camera_topic)
+
+    nodes.append(Node(
         package='autorace_perception',
         executable='bev_projector',
         name='bev_projector',
@@ -57,9 +64,9 @@ def generate_launch_description():
             ('/camera/camera_info', camera_info_topic),
             ('/camera/image_output', '/camera/image_projected'),
         ],
-    )
+    ))
 
-    detect_lane = Node(
+    nodes.append(Node(
         package='autorace_perception',
         executable='detect_lane',
         name='detect_lane',
@@ -69,24 +76,35 @@ def generate_launch_description():
             ('/detect/image_input', '/camera/image_projected'),
             ('/detect/image_output', '/detect/image_lane'),
         ],
-    )
+    ))
 
-    lane_controller = Node(
+    nodes.append(Node(
         package='autorace_core',
         executable='lane_controller',
         name='lane_controller',
         output='screen',
         parameters=[params, sim_time],
-    )
+    ))
 
-    cmd_vel_mux = Node(
+    nodes.append(Node(
         package='autorace_core',
         executable='cmd_vel_mux',
         name='cmd_vel_mux',
         output='screen',
-        parameters=[sim_time],
-    )
+        parameters=[params, sim_time],
+    ))
+    return nodes
 
-    return LaunchDescription(
-        declare_args + [bev_projector, detect_lane, lane_controller, cmd_vel_mux]
-    )
+
+def generate_launch_description():
+    declare_args = [
+        # real: wall clock and param/perception_real.yaml. sim: perception_sim.yaml.
+        DeclareLaunchArgument('profile', default_value='real'),
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
+        # The downward looking lane camera; the forward one is for signs.
+        DeclareLaunchArgument('camera_topic', default_value='/camera_lane/image_raw'),
+        DeclareLaunchArgument('camera_info_topic', default_value='/camera_lane/camera_info'),
+        # true: subscribe to <camera_topic>/compressed and decode on this machine.
+        DeclareLaunchArgument('compressed', default_value='true'),
+    ]
+    return LaunchDescription(declare_args + [OpaqueFunction(function=launch_setup)])
