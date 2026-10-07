@@ -430,3 +430,34 @@ AutoRace 시뮬레이션 작업 정리 (2026-10-02 ~ 10-06)
 - 도구: tools/restart_sim.sh (시뮬 재시작), tools/stop_laps.sh (랩 중단), tools/fw_check.py
   (펌웨어 노드 확인). 주의: 자기 셸 명령줄에 kill 패턴이 들어가면 자기 셸이 죽는다 —
   스크립트는 파일로 두고 이름만 불러서 실행할 것.
+
+
+20. 가제보로 보기, 차단바 뒤 차선 이탈 (10/7)
+-----------------------------------------------
+- 사용자가 GUI 로 한 바퀴를 보고 "차단바 끝나고 나와서 차선을 이탈한다"고 지적.
+- 이 컴퓨터의 OpenGL 은 llvmpipe(소프트웨어, CPU) 다: RTX 4070 드라이버가 안 올라와 있고
+  (nvidia-smi 불통) AMD iGPU 도 안 쓰인다. 로봇 카메라 렌더링이 전부 CPU 이고, GUI 창은
+  CPU 렌더러를 하나 더 얹는다 → RTF 0.52, 파이썬 노드들이 굶어 차선 검출 9.7 Hz / 제어 17 Hz
+  (설계 15 / 20). 라이브로 보면 제어가 흐트러진다.
+  ※ NVIDIA 드라이버를 살리면 전부 해결된다 (GPU 렌더링이면 GUI 를 켜도 RTF 1).
+- 랩 시간 측정 정정: 지금까지의 "초"는 전부 벽시계였다 (rec_lap.py, run.log 타임스탬프).
+  RTF < 1 이면 그만큼 부풀려진다. tools/simtime.py 로 bag 의 /odom 스탬프에서 시뮬 시간을 잰다.
+    · 18절 "182~188 → 166 s (녹화 프로세스)" : 시뮬 시간으로는 둘 다 ~134 s. 부하는 벽시계만 늘렸다.
+    · 실차 한계 없이(final) 123 s, 실차 한계(real·real2·real3) 140~142 s. 즉 실차 한계 비용은
+      +17 s (19절의 "+4 s" 는 RTF 차이에 묻힌 잘못된 값).
+    · GUI 로 본 바퀴 289 s 벽시계 = 144 s 시뮬.
+- 앞으로 랩 테스트는 rtf:=0.5 로 돌린다 (laps.sh 가 LIMIT=800). 그러면 노드들이 설계 속도로
+  돌고(검출 15 Hz, 제어 20 Hz 시뮬 기준) 결과가 실차 조건에 가깝다. 시간은 simtime.py 로.
+- 차단바 뒤 우회전 출구의 이탈 (35바퀴 중 3번 6~10 cm, 여럿 3~5 cm) 원인 둘:
+  1. 출구에서 안쪽 흰선이 몇 프레임 사라지면(state 3/1, 한 줄만) 검출기의 "한 줄에서 반 차로"
+     점이 50~63°(또는 −19°) 로 튄다. 코스의 가장 급한 커브도 0.16 m 앞에서 25° 이내다.
+     → detect_lane max_target_angle 1.1 → 0.7 rad (후보 호 자체를 거기까지만).
+     → lane_controller single_line_slew 0.5: 한 줄만 보일 때는 곡률을 주기당 0.5 /m 까지만 바꿈.
+  2. 루프 지연 (카메라 66 ms + 20 Hz 두 단): 커브 출구에서 ω 0.8 이 0.2 s 더 가서 5 cm 바깥.
+     → lane_controller·cmd_vel_mux publish_rate 20 → 50 Hz.
+  결과 (rtf 0.5): 차단바 뒤 구간 최대 1.8 / 2.6 / 2.8 cm (수정 전 1.7~8.4), 한 바퀴 140~143 s 시뮬.
+- 보기: 라이브 GUI 대신 녹화 재생. 런치 record:=DIR (gz --record), tools/playback.sh DIR
+  (헤드리스 시뮬을 먼저 끄고 gz sim --playback). 센서·노드 없이 상태만 재생하므로 가볍다.
+- 도구: tools/restart_sim.sh LOG [gui] [rtf] [record_dir], tools/stop_sim.sh, tools/stop_laps.sh,
+  tools/simtime.py, tools/jitter.py / latency.py / mux_lag.py / lat_test.sh (루프 지연 측정).
+  (주의 재확인: kill 패턴이 든 명령을 heredoc 으로 쓰면 자기 셸이 죽는다. 스크립트는 파일로.)

@@ -94,6 +94,7 @@
 ```
 ~/Desktop/autorace_ws/
 ├── docs/                          # 설계/운영 문서
+├── hardware/venue_props/          # 연습 경기장 소품 3D 프린팅 모델 (FreeCAD 생성기, STL/STEP, 배선)
 └── src/
     ├── turtlebot3_autorace/       # (외부) ROBOTIS 원본 - 수정 최소화
     ├── turtlebot3_simulations/    # (외부) 시뮬 모델 원본

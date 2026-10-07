@@ -43,6 +43,10 @@ from std_msgs.msg import String
 from std_msgs.msg import UInt8
 
 
+# Of /detect/lane_state: both lines in view.
+LANE_BOTH = 2
+
+
 class LaneController(Node):
 
     def __init__(self):
@@ -56,6 +60,10 @@ class LaneController(Node):
         # 1.0 is plain pure pursuit; more turns in harder towards the target.
         self.declare_parameter('pursuit_gain', 1.0)
         self.declare_parameter('max_angular', 2.0)
+        # With one line in view the target is half a lane from it, and where
+        # that line is cut short at the exit of a bend the point jumps. The
+        # curvature may then change by no more than this per cycle (1/m).
+        self.declare_parameter('single_line_slew', 0.5)
         # Turn rate above which the robot slows down rather than turn faster.
         self.declare_parameter('cornering_rate', 0.6)
         self.declare_parameter('lane_timeout', 0.5)
@@ -65,13 +73,14 @@ class LaneController(Node):
         self.declare_parameter('follow_timeout', 0.5)
         # A speed limit on /control/max_vel holds only while it keeps coming.
         self.declare_parameter('limit_timeout', 0.5)
-        self.declare_parameter('publish_rate', 20.0)
+        self.declare_parameter('publish_rate', 50.0)
 
         self.max_speed = self.get_parameter('max_speed').value
         self.min_speed = self.get_parameter('min_speed').value
         self.standby_speed = self.get_parameter('standby_speed').value
         self.pursuit_gain = self.get_parameter('pursuit_gain').value
         self.max_angular = self.get_parameter('max_angular').value
+        self.single_line_slew = self.get_parameter('single_line_slew').value
         self.cornering_rate = self.get_parameter('cornering_rate').value
         self.lane_timeout = self.get_parameter('lane_timeout').value
         self.recovery_speed = self.get_parameter('recovery_speed').value
@@ -91,6 +100,7 @@ class LaneController(Node):
         self.target = None          # (ahead, left) of the axle, metres
         self.target_time = 0.0
         self.last_angular = 0.0
+        self.last_curvature = 0.0
         self.lane_state = 0
         self.follow = None
         self.follow_time = 0.0
@@ -134,6 +144,11 @@ class LaneController(Node):
             # Curvature of the arc from the axle, along the heading, through
             # the target.
             curvature = self.pursuit_gain * 2.0 * left / (ahead * ahead + left * left)
+            if self.lane_state != LANE_BOTH:
+                step = max(-self.single_line_slew,
+                           min(self.single_line_slew, curvature - self.last_curvature))
+                curvature = self.last_curvature + step
+            self.last_curvature = curvature
 
             speed = self.max_speed if self.run_active else self.standby_speed
             if self.limit is not None and now - self.limit_time < self.limit_timeout:

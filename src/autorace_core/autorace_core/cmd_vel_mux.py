@@ -59,7 +59,7 @@ class CmdVelMux(Node):
         super().__init__('cmd_vel_mux')
 
         self.declare_parameter('input_timeout', 0.3)
-        self.declare_parameter('publish_rate', 20.0)
+        self.declare_parameter('publish_rate', 50.0)
         self.declare_parameter('stall_timeout', 20.0)
         self.declare_parameter('creep_timeout', 25.0)
         self.declare_parameter('creep_speed', 0.05)
