@@ -226,24 +226,25 @@ def tl_led_plate():
     return cut(plate, *tools)
 
 
-# ================================================================ B. 컨트롤러 박스 (Arduino Uno)
-CB_IN = (80.0, 62.0, 30.0)
+# ================================================================ B. 컨트롤러 박스 (Arduino Mega 2560)
+# 보드 101.6 × 53.3. 구멍 6개 (Uno 와 같은 4개 + 오른쪽 2개), USB-B·DC 잭은 Uno 와 같은 자리.
+CB_IN = (113.0, 62.0, 30.0)
 CB_WALL, CB_FLOOR = 2.0, 2.0
-UNO_HOLES = [(14.0, 2.5), (15.3, 50.7), (66.1, 7.6), (66.1, 35.5)]
-UNO_AT = (5.0, 4.0)      # 보드 왼쪽 아래 모서리의 박스 내부 좌표
+MEGA_HOLES = [(14.0, 2.5), (15.3, 50.7), (66.1, 7.6), (66.1, 35.5), (90.2, 50.7), (96.5, 2.5)]
+MEGA_AT = (5.0, 4.0)     # 보드 왼쪽 아래 모서리의 박스 내부 좌표
 
 
 def ctrl_box():
     lx, ly, lz = (CB_IN[0] + 2 * CB_WALL, CB_IN[1] + 2 * CB_WALL, CB_IN[2] + CB_FLOOR)
     body = rect_tube(lx, ly, lz, CB_WALL, 0, 0, 0, cx=False, cy=False, floor=CB_FLOOR)
-    ox, oy = CB_WALL + UNO_AT[0], CB_WALL + UNO_AT[1]
-    for hx, hy in UNO_HOLES:
+    ox, oy = CB_WALL + MEGA_AT[0], CB_WALL + MEGA_AT[1]
+    for hx, hy in MEGA_HOLES:
         body = body.fuse(cyl(3.0, 5.0, ox + hx, oy + hy, CB_FLOOR))
-    tools = [cyl(M3_TAP / 2, 8.0, ox + hx, oy + hy, CB_FLOOR - 1) for hx, hy in UNO_HOLES]
+    tools = [cyl(M3_TAP / 2, 8.0, ox + hx, oy + hy, CB_FLOOR - 1) for hx, hy in MEGA_HOLES]
     z0 = CB_FLOOR + 5.0 + 1.6 - 1.0                                   # 보드 윗면 바로 아래
     tools.append(box(CB_WALL + 2, 14.0, 13.0, -1, oy + 38.1, z0, cy=True))  # USB-B
     tools.append(box(CB_WALL + 2, 12.0, 13.0, -1, oy + 7.6, z0, cy=True))   # DC 잭
-    for x in (20.0, 42.0, 64.0):                                       # 윗가장자리 케이블 홈 (뒷벽)
+    for x in (24.0, 58.0, 92.0):                                       # 윗가장자리 케이블 홈 (뒷벽)
         tools.append(box(8.0, CB_WALL + 2, 9.0, x, ly - CB_WALL - 1, lz - 8.0, cx=True))
     return cut(body, *tools)
 
@@ -441,7 +442,7 @@ def build():
     add('A4', 'tl_foot', 1, '신호등 발판 130×110×6, 밑면 케이블 홈', tl_foot())
     add('A5', 'tl_lamp_cup', 3, '램프 컵+확산 렌즈(투명/백색 출력), 안쪽에서 끼움', tl_lamp_cup())
     add('A6', 'tl_led_plate', 3, 'LED 판: 10 mm ×1 또는 5 mm ×3', tl_led_plate())
-    add('B1', 'ctrl_box', 2, 'Arduino Uno 박스 84×66×32, USB/DC 창, 케이블 홈 3', ctrl_box())
+    add('B1', 'ctrl_box', 2, 'Arduino Mega 2560 박스 117×66×32, USB/DC 창, 케이블 홈 3', ctrl_box())
     add('B2', 'ctrl_box_lid', 2, '박스 뚜껑 (압입)', ctrl_box_lid())
     add('C1', 'lc_post', 1, '차단바 기둥 30×26×212, 위에 SG90/MG90S 포켓, 속 빈 배선 통로', lc_post())
     add('C2', 'lc_foot', 1, '차단바 발판 160×100×6, 기둥 소켓, 밑면 케이블 홈', lc_foot())
