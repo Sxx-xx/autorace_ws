@@ -182,8 +182,8 @@ def level_crossing(explode=0.0):
     tail = place(part('C6_lc_tail'), axes(Z, Y, X), (-90 - e * 30, yb, 180 + e * 40))
     items.append((tail, GREY)); labels.append(('C6 tail (weights inside)', (-120 - e * 30, yb, 215 + e * 40)))
     # 컨트롤러 박스: 발판 홈이 나오는 -x 쪽
-    items.append((place(part('B1_ctrl_box'), np.eye(3), (-190, -33, 0)), GREY))
-    labels.append(('B1 ctrl box (cable via foot channel)', (-190, 40, 0)))
+    items.append((place(part('B1_ctrl_box'), np.eye(3), (-223, -33, 0)), GREY))
+    labels.append(('B1 ctrl box (cable via foot channel)', (-223, 40, 0)))
     # 2번 센서 기둥: 도로 건너편, 바에서 60 mm 앞(-y). 구멍이 x 축 → 도로를 바라본다
     items.append((place(part('C7_lc_sensor_post_e18'), np.eye(3), (360, -60 - 30, 0)), GREY))
     labels.append(('C7 sensor 2 (60 mm before bar, h=40)', (360, -140, 70)))
