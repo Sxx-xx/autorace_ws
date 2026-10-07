@@ -32,7 +32,7 @@ def generate_launch_description():
     camera_topic = LaunchConfiguration('camera_topic')
 
     declare_args = [
-        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('camera_topic', default_value='/camera/image_raw'),
     ]
 

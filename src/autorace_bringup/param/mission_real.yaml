@@ -1,0 +1,125 @@
+---
+# Mission tuning for the real TurtleBot3 Burger.
+#
+# Copied from mission_sim.yaml. Course distances (tunnel, parking bays,
+# intersection branch) come from the venue map the sim was built from; check
+# them on the practice course with a tape. Colour thresholds for the forward
+# camera detectors are listed here (they were code defaults in the sim) so
+# they can be tuned under the venue's lights without touching the code.
+mission_manager:
+  ros__parameters:
+    enabled_missions: 'intersection,construction,parking,level_crossing,tunnel'
+    green_streak: 5
+    sign_streak: 3
+    mission_timeout:
+      intersection: 120.0
+      parking: 90.0
+
+traffic_light_mission:
+  ros__parameters:
+    stop_distance: 0.12
+
+intersection_mission:
+  ros__parameters:
+    sign_streak: 3
+    branch_distance: 2.0
+
+construction_mission:
+  ros__parameters:
+    speed: 0.16
+    lookahead: 0.11
+    robot_radius: 0.095
+    comfort_clearance: 0.20
+    line_slack: 0.01
+
+parking_mission:
+  ros__parameters:
+    bay_station: 0.24
+    bay_depth: 0.29
+    speed: 0.16
+    approach_speed: 0.18
+    # 1.0 rad/s: faster spins slipped in the sim and the odometry over-counted.
+    # Real tyres on Formex may differ; check the heading after a spin.
+    turn_rate: 1.0
+    park_time: 0.3
+
+level_crossing_mission:
+  ros__parameters:
+    stop_gap: 0.12
+    hold_gain: 0.6
+    hold_speed: 0.15
+    creep_speed: 0.07
+    open_scans: 3
+
+tunnel_mission:
+  ros__parameters:
+    inside: 1.86
+    entrance_right: 0.18
+    exit_x: 1.68
+    speed: 0.18
+    cornering_rate: 1.0
+
+# ---- forward camera detectors (TUNE under the venue's lights) ----
+# Watch /detect/image_sign, /detect/image_traffic_light,
+# /detect/image_level_crossing while adjusting. OpenCV hue is 0..179.
+detect_sign:
+  ros__parameters:
+    blue:
+      hue_l: 95
+      hue_h: 125
+      saturation_l: 120
+      value_l: 50
+    yellow:
+      hue_l: 18
+      hue_h: 35
+      saturation_l: 120
+      value_l: 100
+    red:
+      hue_margin: 10
+      saturation_l: 100
+      value_l: 80
+    black:
+      value_h: 70
+    white:
+      saturation_h: 80
+      value_l: 120
+    min_area: 250         # pixels at 320x240; scale with the resolution
+    arrow:
+      min_shift: 0.08
+    publish_debug_image: true
+
+detect_traffic_light:
+  ros__parameters:
+    # A lit LED is brighter and more saturated than anything painted; with
+    # the printed housing (black PLA) and 10 mm LEDs these should hold, but
+    # value_l may need lowering if the lamps look washed out on camera.
+    lamp:
+      saturation_l: 100
+      value_l: 200
+    red:
+      hue_margin: 10
+    yellow:
+      hue_l: 20
+      hue_h: 38
+    green:
+      hue_l: 45
+      hue_h: 95
+    min_area: 30
+    housing:
+      value_h: 110
+    publish_debug_image: true
+
+detect_level_crossing:
+  ros__parameters:
+    # The bar must be red/white striped (print C4 red and white): the
+    # detector looks for solid red patches in a row.
+    red:
+      hue_margin: 10
+      saturation_l: 100
+      value_l: 80
+    stripe:
+      min_area: 40
+      min_fill: 0.6
+      min_thickness: 9    # pixels at 320x240: how near the bar must be
+    open_angle: 0.35
+    publish_debug_image: true
