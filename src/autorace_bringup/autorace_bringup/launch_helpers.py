@@ -34,8 +34,11 @@ def republish(image_topic, use_sim_time, name):
         executable='republish',
         name=name,
         output='screen',
-        arguments=['compressed', 'raw'],
-        parameters=[{'use_sim_time': use_sim_time}],
+        # Jazzy's republish reads the transports from parameters; the positional
+        # arguments of older versions are ignored there (it then waits for a
+        # raw input that never comes).
+        parameters=[{'use_sim_time': use_sim_time,
+                     'in_transport': 'compressed', 'out_transport': 'raw'}],
         remappings=[
             ('in/compressed', image_topic + '/compressed'),
             ('out', decoded_topic(image_topic)),

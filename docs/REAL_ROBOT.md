@@ -64,8 +64,10 @@ BEV 의 축척이 몇 % 틀어져 차선 폭 판정이 흔들린다.
   PC 의 ssh 키가 들어가 있어 비밀번호 없이 들어간다. 핫스팟 172.20.10.0/28, PC 는 .2.
 - Pi 에 있는 것: ROS 2 Jazzy, `ros-jazzy-turtlebot3-bringup`·`turtlebot3-teleop`(10/7 설치),
   `hls_lfcd_lds_driver`. **없는 것**: 우리 워크스페이스, `usb_cam`, `image_transport_plugins`,
-  카메라(USB 카메라가 꽂혀 있지 않다). `~/.bashrc` 에 `TURTLEBOT3_MODEL=burger LDS_MODEL=LDS-01
-  ROS_DOMAIN_ID=0`. PC 도 도메인 0.
+  카메라(USB 카메라가 꽂혀 있지 않다). `~/.bashrc` 와 `~/start_*.sh` 에 `TURTLEBOT3_MODEL=burger
+  LDS_MODEL=LDS-01 ROS_DOMAIN_ID=30`. PC 도 도메인 30 (10/8 에 0 에서 옮김: 같은 핫스팟의
+  다른 로봇 172.20.10.4 가 도메인 0 에서 /odom, /cmd_vel 을 같이 쓰고 있었다. 그 로봇을 보려면
+  그 터미널에서만 `ROS_DOMAIN_ID=0`).
 - **`/cmd_vel` 타입**: Jazzy 의 turtlebot3_node 는 기본이 `TwistStamped` 라 우리 `Twist` 발행이
   연결조차 안 된다 (구독자 수 0, 로봇은 가만히). `param/tb3_burger.yaml` 로
   `enable_stamped_cmd_vel: false` 를 주며, 우리 `robot.launch.py` 가 `tb3_param_dir` 로 넘긴다.

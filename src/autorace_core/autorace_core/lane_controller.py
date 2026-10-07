@@ -33,6 +33,8 @@ on the start line a lane that is not yet in view means the camera is still
 coming up, and the robot stands still rather than go looking for it.
 """
 
+import math
+
 from geometry_msgs.msg import PointStamped
 from geometry_msgs.msg import Twist
 import rclpy
@@ -74,6 +76,15 @@ class LaneController(Node):
         # A speed limit on /control/max_vel holds only while it keeps coming.
         self.declare_parameter('limit_timeout', 0.5)
         self.declare_parameter('publish_rate', 50.0)
+        # Stop and turn on the spot at bends instead of steering through them
+        # (the real robot's lane camera sees too little road to steer round a
+        # bend at speed). Off by default: the sim keeps pure pursuit.
+        self.declare_parameter('turn_in_place', False)
+        # Target this far off the heading (rad) is a bend: stop and turn ...
+        self.declare_parameter('turn_enter_angle', 0.35)
+        # ... at this rate (rad/s) until it is within this angle again.
+        self.declare_parameter('turn_rate', 0.25)
+        self.declare_parameter('turn_exit_angle', 0.09)
 
         self.max_speed = self.get_parameter('max_speed').value
         self.min_speed = self.get_parameter('min_speed').value
@@ -89,6 +100,10 @@ class LaneController(Node):
         self.follow_timeout = self.get_parameter('follow_timeout').value
         self.limit_timeout = self.get_parameter('limit_timeout').value
         rate = self.get_parameter('publish_rate').value
+        self.turn_in_place = self.get_parameter('turn_in_place').value
+        self.turn_enter_angle = self.get_parameter('turn_enter_angle').value
+        self.turn_rate = self.get_parameter('turn_rate').value
+        self.turn_exit_angle = self.get_parameter('turn_exit_angle').value
 
         self.create_subscription(PointStamped, '/detect/lane_target', self.callback_target, 1)
         self.create_subscription(Float64, '/control/max_vel', self.callback_max_vel, 1)
@@ -108,6 +123,8 @@ class LaneController(Node):
         self.limit_time = 0.0
         self.recovering_since = None
         self.run_active = False
+        self.turning = 0.0          # turn on the spot: +1 left, -1 right, 0 not turning
+        self.turn_lost_since = None
 
         self.create_timer(1.0 / rate, self.update)
 
@@ -136,6 +153,12 @@ class LaneController(Node):
     def update(self):
         now = self.now()
         fresh = self.target is not None and now - self.target_time < self.lane_timeout
+
+        if self.turn_in_place and self.run_active:
+            turn = self.turn_step(now, fresh)
+            if turn is not None:
+                self.pub_cmd_vel.publish(turn)
+                return
 
         twist = Twist()
         if fresh:
@@ -193,6 +216,42 @@ class LaneController(Node):
                 twist.angular.z = direction * self.recovery_angular
 
         self.pub_cmd_vel.publish(twist)
+
+    def turn_step(self, now, fresh):
+        """Turning on the spot at a bend: the twist, or None to drive as usual.
+
+        The turn ends on what the camera sees, not on odometry: when the lane
+        centre is straight ahead again. If the lane goes out of view while
+        turning, the turn goes on the same way for up to recovery_timeout.
+        """
+        if fresh:
+            self.turn_lost_since = None
+            ahead, left = self.target
+            angle = math.atan2(left, ahead)
+            if self.turning:
+                if abs(angle) < self.turn_exit_angle:
+                    self.turning = 0.0
+                    self.get_logger().info('Facing the lane again, straight on.')
+                    return None
+            elif abs(angle) > self.turn_enter_angle:
+                self.turning = math.copysign(1.0, angle)
+                self.get_logger().info('Bend: turning on the spot %s (%.0f deg off).' % (
+                    'left' if angle > 0 else 'right', math.degrees(angle)))
+            else:
+                return None
+        elif not self.turning:
+            return None
+        else:
+            if self.turn_lost_since is None:
+                self.turn_lost_since = now
+            if now - self.turn_lost_since > self.recovery_timeout:
+                self.turning = 0.0
+                self.turn_lost_since = None
+                return None
+        twist = Twist()
+        twist.angular.z = self.turning * self.turn_rate
+        self.last_angular = twist.angular.z
+        return twist
 
     def shut_down(self):
         self.pub_cmd_vel.publish(Twist())

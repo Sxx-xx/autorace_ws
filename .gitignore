@@ -11,3 +11,6 @@ __pycache__/
 
 # FreeCAD backup files
 *.FCBak
+
+# Recorded runs (ros2 bag), hundreds of MB
+bags/
