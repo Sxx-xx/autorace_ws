@@ -158,8 +158,10 @@ def level_crossing(explode=0.0):
     items, labels = [], []
     e = explode
     items.append((part('C2_lc_foot'), GREY)); labels.append(('C2 foot', (60, -45, 6)))
-    items.append((place(part('C1_lc_post'), np.eye(3), (0, 0, 6 + e * 40)), BLACK))
-    labels.append(('C1 post (servo pocket on +y face)', (16, 0, 120 + e * 40)))
+    items.append((place(part('C9_lc_post_base'), np.eye(3), (0, 0, 6 + e * 20)), BLACK))
+    labels.append(('C9 post base (plug on top, pin through)', (16, 0, 60 + e * 20)))
+    items.append((place(part('C1_lc_post_top'), np.eye(3), (0, 0, 106 + e * 40)), BLACK))
+    labels.append(('C1 post top (servo pocket on +y face)', (16, 0, 150 + e * 40)))
     # 서보 (구매품) : 몸통 12.6 × 22.5(z) 가 +y 벽을 관통, 탭이 바깥, 축이 +y
     ys = 13 + e * 50
     items.append((box_mesh(12.4, 22.0, 22.5, (-6.2, ys - 16, 183.4 + e * 40)), BLUE))
