@@ -27,13 +27,17 @@ keep to.  Speed comes down where the arc is tight.
 When the lane goes missing the controller does not simply give up: it keeps
 creeping forward while turning the way it was last steering, which is usually
 enough to bring the line back into view.  A robot that stands still for 30 s
-ends its run, so stopping is the last resort, not the first.
+ends its run, so stopping is the last resort, not the first.  Not before the
+run has started, though (/autorace/run_active from the mission manager):
+on the start line a lane that is not yet in view means the camera is still
+coming up, and the robot stands still rather than go looking for it.
 """
 
 from geometry_msgs.msg import PointStamped
 from geometry_msgs.msg import Twist
 import rclpy
 from rclpy.node import Node
+from std_msgs.msg import Bool
 from std_msgs.msg import Float64
 from std_msgs.msg import String
 from std_msgs.msg import UInt8
@@ -46,6 +50,9 @@ class LaneController(Node):
 
         self.declare_parameter('max_speed', 0.16)
         self.declare_parameter('min_speed', 0.05)
+        # Up to the stop line before the start: no hurry, and the stop line
+        # detector must not be outrun.
+        self.declare_parameter('standby_speed', 0.08)
         # 1.0 is plain pure pursuit; more turns in harder towards the target.
         self.declare_parameter('pursuit_gain', 1.0)
         self.declare_parameter('max_angular', 2.0)
@@ -62,6 +69,7 @@ class LaneController(Node):
 
         self.max_speed = self.get_parameter('max_speed').value
         self.min_speed = self.get_parameter('min_speed').value
+        self.standby_speed = self.get_parameter('standby_speed').value
         self.pursuit_gain = self.get_parameter('pursuit_gain').value
         self.max_angular = self.get_parameter('max_angular').value
         self.cornering_rate = self.get_parameter('cornering_rate').value
@@ -77,6 +85,7 @@ class LaneController(Node):
         self.create_subscription(Float64, '/control/max_vel', self.callback_max_vel, 1)
         self.create_subscription(UInt8, '/detect/lane_state', self.callback_state, 1)
         self.create_subscription(String, '/detect/lane_follow', self.callback_follow, 1)
+        self.create_subscription(Bool, '/autorace/run_active', self.callback_run_active, 1)
         self.pub_cmd_vel = self.create_publisher(Twist, '/cmd_vel/lane', 1)
 
         self.target = None          # (ahead, left) of the axle, metres
@@ -88,6 +97,7 @@ class LaneController(Node):
         self.limit = None           # a mission's speed limit, and when it last came
         self.limit_time = 0.0
         self.recovering_since = None
+        self.run_active = False
 
         self.create_timer(1.0 / rate, self.update)
 
@@ -97,6 +107,9 @@ class LaneController(Node):
     def callback_target(self, msg):
         self.target = (msg.point.x, msg.point.y)
         self.target_time = self.now()
+
+    def callback_run_active(self, msg):
+        self.run_active = msg.data
 
     def callback_max_vel(self, msg):
         """Take a mission's speed limit; it holds for as long as it keeps coming."""
@@ -122,7 +135,7 @@ class LaneController(Node):
             # the target.
             curvature = self.pursuit_gain * 2.0 * left / (ahead * ahead + left * left)
 
-            speed = self.max_speed
+            speed = self.max_speed if self.run_active else self.standby_speed
             if self.limit is not None and now - self.limit_time < self.limit_timeout:
                 speed = min(speed, self.limit)
             if abs(curvature) * speed > self.cornering_rate:
@@ -133,6 +146,11 @@ class LaneController(Node):
 
             twist.linear.x = speed
             twist.angular.z = angular
+        elif not self.run_active:
+            # Before the start, with no lane in sight, the robot stays where
+            # it was put: a camera that is slow to come up must not send it
+            # wandering off the start line.
+            self.recovering_since = None
         else:
             if self.recovering_since is None:
                 self.recovering_since = now

@@ -171,6 +171,23 @@ def generate_launch_description():
         output='screen',
     )
 
+    firmware = Node(
+        package='autorace_sim',
+        executable='sim_firmware',
+        name='sim_firmware',
+        parameters=[{'use_sim_time': use_sim_time}],
+        output='screen',
+    )
+
+    # On the wall clock: it is the one making the simulated clock.
+    clock = Node(
+        package='autorace_sim',
+        executable='sim_clock',
+        name='sim_clock',
+        parameters=[{'use_sim_time': False}],
+        output='screen',
+    )
+
     return LaunchDescription(
         declare_args + [
             set_model_env,
@@ -185,5 +202,7 @@ def generate_launch_description():
             image_bridge,
             traffic_light,
             level_crossing,
+            firmware,
+            clock,
         ]
     )
