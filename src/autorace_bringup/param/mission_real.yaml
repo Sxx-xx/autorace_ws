@@ -41,7 +41,8 @@ parking_mission:
     # 1.0 rad/s: faster spins slipped in the sim and the odometry over-counted.
     # Real tyres on Formex may differ; check the heading after a spin.
     turn_rate: 1.0
-    park_time: 0.3
+    # Out of the bay as soon as it is in.
+    park_time: 0.0
 
 level_crossing_mission:
   ros__parameters:
