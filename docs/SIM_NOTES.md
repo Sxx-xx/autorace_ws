@@ -155,3 +155,11 @@ pkill -f 'gz[ ]sim'; pkill -f 'ruby.*gz[ ]sim'
 # 확인 (0이어야 함)
 ps -eo pid,args | grep -c '[g]z sim'
 ```
+
+## ⚠️ 주행 중 set_pose 금지
+
+`/world/autorace/set_pose` 는 어느 모델에 쓰든(static 도) 로봇의 물리를 한 스텝 흔든다:
+0.2 m/s 로 달리는 로봇이 앞으로는 거의 안 가고 옆으로 0.6~1 cm 튄다. 신호등 램프를 이걸로
+옮기다가 차단바 뒤 직선에서 바퀴가 선에 걸렸다 (worklog 22절). 모델 배치(teleport, 주차
+house robot, sensor 1, 램프)는 출발 전에만. sim_traffic_light 는 로봇이 1.2 m 안에 있을 때만
+색을 바꾼다 (`cycle_radius`).

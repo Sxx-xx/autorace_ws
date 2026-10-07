@@ -22,6 +22,12 @@ and the others are parked below the course.
 
 The node also publishes the ground truth colour on `/sim/traffic_light`, which
 is only meant for debugging and scoring, never for the robot's own decision.
+
+The lamps are moved only while the robot is near the light. A set_pose on any
+model, static or not, jolts the robot's physics a little (a sideways step of
+up to 1 cm at 0.2 m/s), and on the straight after the level crossing that was
+enough to put a wheel on the line. Once the robot has driven off the light
+holds its colour until the robot comes back.
 """
 
 import math
@@ -62,6 +68,8 @@ class SimTrafficLight(Node):
         self.declare_parameter('duration_green', 5.0)
         self.declare_parameter('world', 'autorace')
         self.declare_parameter('start_delay', 5.0)
+        # The light cycles only while the robot is this near the housing.
+        self.declare_parameter('cycle_radius', 1.2)
 
         self.housing = (
             self.get_parameter('housing_x').value,
@@ -83,12 +91,24 @@ class SimTrafficLight(Node):
         self.placed = None
         self.next_switch = None
         self.start_delay = self.get_parameter('start_delay').value
+        self.cycle_radius = self.get_parameter('cycle_radius').value
+        self.robot = None
+        self.create_subscription(Pose, '/sim/robot_pose', self.callback_robot, 1)
         self.started_at = self.now()
 
         self.create_timer(0.1, self.update)
 
     def now(self):
         return self.get_clock().now().nanoseconds / 1e9
+
+    def callback_robot(self, msg):
+        self.robot = (msg.position.x, msg.position.y)
+
+    def robot_near(self):
+        if self.robot is None:
+            return True
+        return math.hypot(self.robot[0] - self.housing[0],
+                          self.robot[1] - self.housing[1]) < self.cycle_radius
 
     def socket_pose(self, color):
         """World pose of a lamp sitting in its socket."""
@@ -118,10 +138,11 @@ class SimTrafficLight(Node):
         self.client.call_async(request)
 
     def show(self, color):
+        # Only the lamps that change places are moved: every move jolts the robot.
         for other in COLORS:
             if other == color:
                 self.move_lamp(other, self.socket_pose(other))
-            else:
+            elif self.placed is None or other == self.placed:
                 self.move_lamp(other, self.parked_pose(other))
         self.placed = color
         self.get_logger().info(f'Traffic light: {color}')
@@ -138,7 +159,7 @@ class SimTrafficLight(Node):
         if self.next_switch is None:
             self.show(COLORS[self.index])
             self.next_switch = now + self.durations[COLORS[self.index]]
-        elif now >= self.next_switch:
+        elif now >= self.next_switch and self.robot_near():
             self.index = (self.index + 1) % len(COLORS)
             color = COLORS[self.index]
             self.show(color)
