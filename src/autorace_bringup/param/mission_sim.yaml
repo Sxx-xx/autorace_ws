@@ -2,9 +2,10 @@
 # Mission tuning for the simulated AutoRace course.
 mission_manager:
   ros__parameters:
-    # Only the missions that have a node behind them. A mission nobody answers
-    # for holds the state machine until it times out.
-    enabled_missions: ['intersection', 'construction', 'parking', 'level_crossing', 'tunnel']
+    # Only the missions that have a node behind them (comma-separated; empty
+    # for all). A mission nobody answers for holds the state machine until
+    # it times out. race.launch.py's missions:= argument overrides this.
+    enabled_missions: 'intersection,construction,parking,level_crossing,tunnel'
     mission_timeout:
       # From the warning sign round the longer branch at bend speed.
       intersection: 120.0
