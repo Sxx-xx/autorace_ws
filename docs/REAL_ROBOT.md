@@ -86,6 +86,27 @@ BEV 의 축척이 몇 % 틀어져 차선 폭 판정이 흔들린다.
 - 주의: Pi 에서 `pkill -f`/`pgrep -f` 패턴에 자기 명령줄이 걸리면 ssh 세션이 죽고, 띄운
   런치가 고아가 되어 두 개가 포트를 다툰다. 패턴은 `turtlebot3_ro[s]` 식으로 쓸 것.
 
+### 카메라 (10/8)
+
+- 달려 있는 것은 USB 웹캠이 아니라 **CSI 카메라 imx219 (Pi 카메라 v2)** 한 대다. 차선 카메라
+  (`/camera_lane`) 로 쓴다. 전방 카메라는 아직 없다.
+- 24.04 의 libcamera 두 가지가 다 안 된다: ROS 의 `camera_ros`(libcamera 0.7.2)는 IPA 모듈
+  서명이 깨져 격리 프로세스로 돌다가 libcamera 버그(V4L2 컨트롤 직렬화)로 죽고, 우분투의
+  libcamera 0.2(`cam`, gstreamer `libcamerasrc`)는 ISP 버퍼 단계 assert 로 죽는다.
+  → **레거시 카메라 스택**(`start_x=1`, `gpu_mem=128`, `camera_auto_detect=0`,
+  `dtoverlay=vc4-fkms-v3d`, 모듈 bcm2835-v4l2) 으로 /dev/video0 을 일반 V4L2 장치로 만들어
+  쓴다. 22.04 에서 ustreamer 로 되던 것과 같은 경로다.
+- 노드: `autorace_bringup/csi_camera.py` (`ros2 run autorace_bringup csi_camera`,
+  `v4l2_device:=/dev/video0`, 320×240 30 fps, JPEG 로 `image_raw/compressed` 와 `camera_info`
+  발행. raw 는 안 보낸다). camera_info 는 보정 전까지 62° 렌즈 근사(fx 265).
+- Pi 의 스크립트: `~/start_robot.sh`(베이스, Twist 설정), `~/start_lidar.sh`, `~/start_camera.sh`,
+  그리고 셋을 한 번에 띄우는 `~/start_all.sh` (로그·pid 는 `~/<이름>.log/.pid`).
+- PC 의 도구: `tools/lane_view.sh` (제어기 없이 디코드 → BEV → 차선 검출만; 로봇은 안 움직임),
+  `tools/grab_views.py` (카메라·BEV·차선 화면 저장), 실시간은 `rqt_image_view`.
+- 주의: PC 에서 시뮬레이션이 떠 있으면 `/camera_lane/image_raw/compressed` 를 시뮬의
+  image_bridge 가 발행해 **실차 영상으로 착각**한다 (한 번 그랬다). 실차 작업 전에
+  `tools/stop_sim.sh`, 그리고 `ros2 topic info -v` 로 발행 노드를 확인할 것.
+
 ## 매번
 
 ```bash
