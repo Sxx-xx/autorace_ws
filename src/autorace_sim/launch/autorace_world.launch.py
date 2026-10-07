@@ -65,6 +65,11 @@ def generate_launch_description():
         # the cameras' pictures unprocessed. 0 is as fast as the machine can.
         DeclareLaunchArgument('rtf', default_value='1.0',
                               description='Real time factor of the simulation.'),
+        # Record the world's state to this directory, to watch afterwards
+        # with `gz sim -r --playback DIR` (the GUI costs this machine too
+        # much to watch live). Empty: no recording.
+        DeclareLaunchArgument('record', default_value='',
+                              description='Directory to record the simulation state into.'),
         # On the start line, facing the lights.
         DeclareLaunchArgument('x_pose', default_value=str(start['x'])),
         DeclareLaunchArgument('y_pose', default_value=str(start['y'])),
@@ -90,11 +95,13 @@ def generate_launch_description():
             with open(world_file, 'w') as f:
                 f.write(sdf.replace('<real_time_factor>1.0</real_time_factor>',
                                     f'<real_time_factor>{rtf}</real_time_factor>'))
+        record = LaunchConfiguration('record').perform(context)
+        recording = f' --record --record-path {record}' if record else ''
         return [IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')
             ),
-            launch_arguments={'gz_args': f'-r -s -v2 {world_file}',
+            launch_arguments={'gz_args': f'-r -s -v2{recording} {world_file}',
                               'on_exit_shutdown': 'true'}.items()
         )]
 
