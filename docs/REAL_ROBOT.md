@@ -58,6 +58,27 @@ ros2 run camera_calibration cameracalibrator --size 8x6 --square 0.025 \
 덮어쓴다. 지금 들어 있는 것은 62° 렌즈 근사값(fx 265)이다. 보정 없이도 돌아가지만
 BEV 의 축척이 몇 % 틀어져 차선 폭 판정이 흔들린다.
 
+## 지금 로봇 (2026-10-08 확인)
+
+- 접속: `ssh dd@172.20.10.3` (호스트 이름 `turtlebot1`, 사용자 `dd`; `tb3.local` 은 안 풀린다).
+  PC 의 ssh 키가 들어가 있어 비밀번호 없이 들어간다. 핫스팟 172.20.10.0/28, PC 는 .2.
+- Pi 에 있는 것: ROS 2 Jazzy, `ros-jazzy-turtlebot3-bringup`·`turtlebot3-teleop`(10/7 설치),
+  `hls_lfcd_lds_driver`. **없는 것**: 우리 워크스페이스, `usb_cam`, `image_transport_plugins`,
+  카메라(USB 카메라가 꽂혀 있지 않다). `~/.bashrc` 에 `TURTLEBOT3_MODEL=burger LDS_MODEL=LDS-01
+  ROS_DOMAIN_ID=0`. PC 도 도메인 0.
+- **`/cmd_vel` 타입**: Jazzy 의 turtlebot3_node 는 기본이 `TwistStamped` 라 우리 `Twist` 발행이
+  연결조차 안 된다 (구독자 수 0, 로봇은 가만히). `param/tb3_burger.yaml` 로
+  `enable_stamped_cmd_vel: false` 를 주며, 우리 `robot.launch.py` 가 `tb3_param_dir` 로 넘긴다.
+  Pi 에 우리 워크스페이스를 올리기 전까지는 `~/start_robot.sh` (같은 설정으로
+  `turtlebot3_bringup robot.launch.py tb3_param_dir:=~/tb3_burger_twist.yaml`) 로 띄운다:
+  `ssh dd@172.20.10.3 'setsid nohup ~/start_robot.sh > ~/robot.log 2>&1 < /dev/null & disown'`.
+- 움직임 확인 (PC 에서 Twist 0.05 m/s 3 s, 0.3 rad/s 2 s): 오도메트리 전진 15.5 cm(목표 15),
+  회전 33.9°(목표 34). 배터리 11.3 V. `/odom` 은 Wi-Fi 로 20 Hz (로봇은 30 Hz 발행).
+- **라이다는 아직 `/scan` 이 안 나온다.** 드라이버는 /dev/ttyUSB0 을 열었다고 하고 오류는 없다.
+  LDS-01 인지 LDS-02 인지(LDS-02 면 `ld08_driver`, `LDS_MODEL=LDS-02`), 모터가 도는지 확인할 것.
+- 주의: Pi 에서 `pkill -f`/`pgrep -f` 패턴에 자기 명령줄이 걸리면 ssh 세션이 죽고, 띄운
+  런치가 고아가 되어 두 개가 포트를 다툰다. 패턴은 `turtlebot3_ro[s]` 식으로 쓸 것.
+
 ## 매번
 
 ```bash

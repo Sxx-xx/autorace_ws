@@ -23,7 +23,7 @@ TurtleBot3 Burger의 Pi 를 처음부터 세팅하는 순서. 모니터·키보�
 ## 2. 접속
 
 ```bash
-ssh ubuntu@tb3.local
+ssh dd@172.20.10.3   # 실제 설치: 사용자 dd, 호스트 turtlebot1
 ```
 - `tb3.local` 이 안 풀리면 공유기 관리 페이지의 접속 기기 목록에서 IP 를 찾거나
   PC 에서 `sudo nmap -sn 192.168.0.0/24` (nmap 설치 필요).
