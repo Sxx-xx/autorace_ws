@@ -131,6 +131,9 @@ class DetectLane(Node):
         self.declare_parameter('detect.auto_threshold', True)
         self.declare_parameter('detect.auto_threshold_low', 5000)
         self.declare_parameter('detect.auto_threshold_high', 35000)
+        # The lightness floor never drops below this: a short stretch of line
+        # in view must not let the threshold sink into the road surface.
+        self.declare_parameter('detect.auto_threshold_min_lightness', 50)
         self.declare_parameter('reliability.step', 5)
         self.declare_parameter('process_every_n', 2)
         self.declare_parameter('hold_last_center_sec', 0.4)
@@ -160,6 +163,7 @@ class DetectLane(Node):
         self.auto_threshold = self.get_parameter('detect.auto_threshold').value
         self.auto_low = self.get_parameter('detect.auto_threshold_low').value
         self.auto_high = self.get_parameter('detect.auto_threshold_high').value
+        self.auto_min_lightness = self.get_parameter('detect.auto_threshold_min_lightness').value
         self.reliability_step = self.get_parameter('reliability.step').value
         self.process_every_n = max(1, self.get_parameter('process_every_n').value)
         self.hold_last_center = self.get_parameter('hold_last_center_sec').value
@@ -307,7 +311,7 @@ class DetectLane(Node):
             # floor drops, too many and it rises.
             if pixels > self.auto_high and bounds['lower'][2] < 250:
                 bounds['lower'][2] += 5
-            elif pixels < self.auto_low and bounds['lower'][2] > 50:
+            elif pixels < self.auto_low and bounds['lower'][2] > self.auto_min_lightness:
                 bounds['lower'][2] -= 5
 
         # A scatter of stray pixels is not a line.

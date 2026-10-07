@@ -1,16 +1,17 @@
-# PLACEHOLDER calibration for the lane camera: a 62 deg lens at 320x240
-# (fx = 160 / tan(31 deg) = 265), no distortion. Good enough to bring the
-# pipeline up; replace with camera_calibration's output before tuning the
-# lane geometry:
+# PLACEHOLDER calibration for the lane camera: the Logitech C920 at 432x240
+# (16:9 mode, 70.4 deg across: fx = 216 / tan(35.2 deg) = 306), no
+# distortion. Good enough to bring the pipeline up; replace with
+# camera_calibration's output, taken at 432x240, before tuning the lane
+# geometry:
 #   ros2 run camera_calibration cameracalibrator --size 8x6 --square 0.025 \
 #       --ros-args -r image:=/camera_lane/image_raw -p camera:=/camera_lane
-image_width: 320
+image_width: 432
 image_height: 240
 camera_name: camera_lane
 camera_matrix:
   rows: 3
   cols: 3
-  data: [265.23, 0.0, 160.0, 0.0, 265.23, 120.0, 0.0, 0.0, 1.0]
+  data: [306.20, 0.0, 216.0, 0.0, 306.20, 120.0, 0.0, 0.0, 1.0]
 distortion_model: plumb_bob
 distortion_coefficients:
   rows: 1
@@ -23,4 +24,4 @@ rectification_matrix:
 projection_matrix:
   rows: 3
   cols: 4
-  data: [265.23, 0.0, 160.0, 0.0, 0.0, 265.23, 120.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+  data: [306.20, 0.0, 216.0, 0.0, 0.0, 306.20, 120.0, 0.0, 0.0, 0.0, 1.0, 0.0]

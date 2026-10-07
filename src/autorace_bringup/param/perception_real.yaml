@@ -14,39 +14,45 @@
 bev_projector:
   ros__parameters:
     camera:
-      height: 0.22          # MEASURE: lens centre above the floor (m)
-      pitch: 1.05           # MEASURE: rad nose down (60 deg)
-      forward_offset: 0.030 # MEASURE: lens ahead of the wheel axle (m)
+      height: 0.11          # Pi camera (imx219) lens above the floor, from the lane width (2026-10-08)
+      pitch: 0.543          # rad nose down (31 deg), from the lane lines vanishing point
+      forward_offset: 0.045 # lens ahead of the wheel axle (m) - MEASURE on the C920 mount
     bev:
       pixels_per_meter: 1200.0
       width: 800
       height: 300
-      near: 0.07            # nearer than this the camera sees the robot itself
+      near: 0.12            # the Pi camera sees the floor from 0.12 m
     blur_kernel: 5
 
 detect_lane:
   ros__parameters:
     bev:
       pixels_per_meter: 1200.0
-      near: 0.07
+      near: 0.12
     lane:
       width_m: 0.25         # measured between the line centres on the course
-      control_lookahead: 0.16
+      control_lookahead: 0.15  # must lie in the BEV (from 0.12 m with the Pi camera)
       max_target_angle: 0.7
     detect:
-      min_pixels: 2000
+      # The C920 at 11 cm sees only a short stretch of each line (both lines
+      # from 0.24 m): a line is a few thousand pixels at best. Measured on the
+      # practice course 2026-10-08: floor L 131 (95th 144), white tape L 199,
+      # yellow tape L 145 / S 99.
+      min_pixels: 800
       max_line_width_m: 0.08
       # TUNE: auto_threshold adapts the white threshold to the picture; keep
       # it on. The HSV bounds below are the sim's; check them with
       # /detect/image_lane on the real floor (black Formex is glossy).
       auto_threshold: true
+      auto_threshold_low: 1000
+      auto_threshold_min_lightness: 160   # never down into the floor
       lane:
         white:
           hue_l: 0
           hue_h: 179
           saturation_l: 0
           saturation_h: 70
-          lightness_l: 105
+          lightness_l: 170
           lightness_h: 255
         yellow:
           hue_l: 10
@@ -66,7 +72,7 @@ detect_stop_line:
   ros__parameters:
     bev:
       pixels_per_meter: 1200.0
-      near: 0.07
+      near: 0.12
     red:
       hue_margin: 10      # TUNE
       saturation_l: 120
@@ -75,6 +81,12 @@ detect_stop_line:
 
 lane_controller:
   ros__parameters:
+    # Straight on at full speed, and at a bend stop and turn on the spot
+    # until the lane is straight ahead again (2026-10-08).
+    turn_in_place: false     # tried 2026-10-08: back to steering through bends, slower
+    turn_enter_angle: 0.35    # 20 deg
+    turn_exit_angle: 0.09     # 5 deg
+    turn_rate: 0.25
     # The motors do 0.211 m/s unloaded and less under load; 0.18 leaves the
     # outer wheel room to turn at speed. Raise towards 0.20 once the lane
     # following is clean on the real floor.
@@ -84,7 +96,7 @@ lane_controller:
     standby_speed: 0.0
     pursuit_gain: 1.0
     max_angular: 2.0
-    cornering_rate: 0.825
+    cornering_rate: 0.5      # bends slower: 0.07 m/s at the 0.15 m radius of the practice bend
     lane_timeout: 0.5
     recovery_speed: 0.05
     recovery_angular: 0.45

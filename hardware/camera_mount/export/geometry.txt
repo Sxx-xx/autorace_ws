@@ -1,0 +1,11 @@
+lens at x +20.0 mm (from the axle), z 247.4 mm, pitch 51.0 deg
+floor in view: 0.097 .. 0.460 m from the axle
+half width at 0.10 m: 0.197 m (both lines need 0.145)
+half width at 0.15 m: 0.201 m (both lines need 0.145)
+half width at 0.20 m: 0.216 m (both lines need 0.145)
+ray to 0.10 m passes the plate front edge at z 186 mm (edge 145): clear
+lidar front edge x -7, lens x +20: lidar behind the lens, out of the picture
+arm bottom z 202 over lidar top 190; post -98..-84 vs lidar rear edge -57: clear
+foot slot: x -82 .. -62 (20 mm long, M3), screwdriver hole through the arm above it
+part size: 91 x 22 x 95 mm, volume 47.9 cm3 (~59 g PLA solid)
+camera_lane yaml: height 0.247, pitch 0.89 rad, forward_offset 0.020
