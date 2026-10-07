@@ -80,9 +80,9 @@ BEV 의 축척이 몇 % 틀어져 차선 폭 판정이 흔들린다.
   `autorace_bringup/ld_lidar.py` 를 썼다 (`ros2 run autorace_bringup ld_lidar`, pyserial).
   LDS-01 처럼 1° 360 칸 LaserScan 을 낸다. Pi 에는 `~/ld_lidar.py` + `~/start_lidar.sh`
   (pid 는 `~/lidar.pid`) 로 떠 있다. PC 에서 10 Hz, 유효 215/360.
-  **앞 방향 기준(`angle_offset_deg`)과 회전 방향(`clockwise`)은 아직 안 맞췄다**: 로봇 앞
-  30 cm 에 물체를 두고 가장 가까운 칸이 0° 가 되게 offset 을 정한 뒤, 왼쪽에 둔 물체가 90°
-  (ROS 반시계) 에 오는지 확인할 것. 틀리면 공사·주차·터널 미션이 좌우를 거꾸로 본다.
+  방향은 기본값(`angle_offset_deg 0`, `clockwise true`)으로 맞다 (10/8 확인): 정면 물체가
+  0°(354~5°), 왼쪽 물체가 86~90° 에 잡힌다 — ROS 반시계 규약 그대로. 라이다를 다시 장착하면
+  같은 방법으로 다시 확인할 것 (틀리면 공사·주차·터널 미션이 좌우를 거꾸로 본다).
 - 주의: Pi 에서 `pkill -f`/`pgrep -f` 패턴에 자기 명령줄이 걸리면 ssh 세션이 죽고, 띄운
   런치가 고아가 되어 두 개가 포트를 다툰다. 패턴은 `turtlebot3_ro[s]` 식으로 쓸 것.
 
