@@ -35,9 +35,12 @@ def pose(x, y, z=0.0, yaw=0.0):
     return f'{x:.3f} {y:.3f} {z:.3f} 0 0 {yaw:.4f}'
 
 
-# Start: behind the start line (x 408-411) in the lane of the top road
+# Start: in the lane of the top road, on the stop line (see below),
 # (white y 61, yellow y 81), heading image-left (+Y) towards the light.
-START_X, START_Y = world(425, 71)
+# On the stop line, as the rules have it: the line spans y 0.868-0.918 in the
+# lane of the top road (centre x 1.752), and the body reaches 0.038 ahead of
+# the axle, so the axle 2 cm short of the line's centre puts the front on it.
+START_X, START_Y = 1.752, 0.870
 START_YAW = math.pi / 2
 
 # Traffic light: past the start line, outside the road on the robot's right.

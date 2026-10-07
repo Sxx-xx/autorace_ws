@@ -36,7 +36,7 @@ parking_mission:
     speed: 0.16
     approach_speed: 0.20
     turn_rate: 1.0
-    park_time: 0.3
+    park_time: 0.0
 
 level_crossing_mission:
   ros__parameters:

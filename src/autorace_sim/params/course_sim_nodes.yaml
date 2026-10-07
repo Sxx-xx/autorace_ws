@@ -9,8 +9,8 @@ sim_traffic_light:
 
 sim_level_crossing:
   ros__parameters:
-    start_x: 1.767
-    start_y: 0.695
+    start_x: 1.752
+    start_y: 0.87
     start_yaw: 1.5708
     sensor1_x: -1.249
     sensor1_y: -1.084
