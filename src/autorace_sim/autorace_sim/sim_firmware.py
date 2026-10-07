@@ -24,7 +24,10 @@ for them, so that the course is driven with the limits of the real robot:
 - the command reaches the board in hundredths (1 cm/s, 0.01 rad/s);
 - the firmware clamps the linear speed to what 61 rpm gives at the wheel
   (0.211 m/s) and the angular speed to that over the turning radius
-  (2.64 rad/s), each on its own;
+  (2.64 rad/s), each on its own. The real robot is worse than that: asked
+  for 2.64 rad/s or more it does not move at all (measured 2026-10-08, the
+  wheel goal lands on the motor's velocity limit and is dropped), and
+  2.5 rad/s is the fastest spin it does, so that is the limit here;
 - each wheel is then asked for v -/+ w * separation / 2, and a wheel asked
   for more than the motor can turn simply turns at its most. The robot does
   not slow down to keep the curvature: it goes straighter than it was told.
@@ -51,13 +54,17 @@ class SimFirmware(Node):
         # The motors' no-load speed at 12 V; under load they do less.
         self.declare_parameter('motor_rpm', 61.0)
         self.declare_parameter('wheel_speed', 0.0)   # overrides motor_rpm if > 0
+        # The fastest spin the real robot does; at the firmware's own 2.64
+        # the wheels stop dead.
+        self.declare_parameter('max_angular', 2.5)
 
         def value(name):
             return self.get_parameter(name).value
 
         self.half_separation = value('wheel_separation') / 2.0
         self.max_linear = value('wheel_radius') * 2.0 * math.pi * value('motor_rpm') / 60.0
-        self.max_angular = self.max_linear / value('turning_radius')
+        self.max_angular = min(self.max_linear / value('turning_radius'),
+                               value('max_angular'))
         self.wheel_speed = value('wheel_speed') or self.max_linear
 
         self.create_subscription(Twist, '/cmd_vel', self.callback_cmd_vel, 1)
