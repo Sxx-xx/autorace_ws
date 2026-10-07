@@ -2,7 +2,8 @@
 # Note: unlike turtlebot3_gazebo's own bridge, cmd_vel is bridged as a plain
 # Twist, which is what the AutoRace controllers publish.
 
-- ros_topic_name: "clock"
+# Every physics step; sim_clock passes it on as /clock at 100 Hz.
+- ros_topic_name: "sim/clock"
   gz_topic_name: "clock"
   ros_type_name: "rosgraph_msgs/msg/Clock"
   gz_type_name: "gz.msgs.Clock"
@@ -26,7 +27,9 @@
   gz_type_name: "gz.msgs.Pose_V"
   direction: GZ_TO_ROS
 
-- ros_topic_name: "cmd_vel"
+# The command goes through sim_firmware first, which clamps it as the
+# OpenCR board and the motors of the real robot would.
+- ros_topic_name: "sim/cmd_vel"
   gz_topic_name: "cmd_vel"
   ros_type_name: "geometry_msgs/msg/Twist"
   gz_type_name: "gz.msgs.Twist"

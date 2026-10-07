@@ -40,6 +40,8 @@ setup(
         'console_scripts': [
             'sim_traffic_light = autorace_sim.sim_traffic_light:main',
             'sim_level_crossing = autorace_sim.sim_level_crossing:main',
+            'sim_firmware = autorace_sim.sim_firmware:main',
+            'sim_clock = autorace_sim.sim_clock:main',
         ],
     },
 )

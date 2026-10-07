@@ -34,7 +34,7 @@ parking_mission:
     bay_depth: 0.29
     speed: 0.16
     approach_speed: 0.20
-    turn_rate: 1.5
+    turn_rate: 1.0
     park_time: 0.3
 
 level_crossing_mission:
@@ -52,5 +52,5 @@ tunnel_mission:
     inside: 1.86
     entrance_right: 0.18
     exit_x: 1.68
-    speed: 0.22
+    speed: 0.20
     cornering_rate: 1.0

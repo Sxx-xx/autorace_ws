@@ -65,7 +65,7 @@ detect_stop_line:
 
 lane_controller:
   ros__parameters:
-    max_speed: 0.22
+    max_speed: 0.20
     min_speed: 0.05
     pursuit_gain: 1.0
     max_angular: 2.0

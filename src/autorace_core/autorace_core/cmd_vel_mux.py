@@ -24,6 +24,13 @@ A stall watchdog guards the competition rule that a robot standing still for
 30 s ends the run: after `stall_timeout` seconds without motion the mux drops
 back to the lane controller, and if that does not help either it creeps
 forward on its own.
+
+The command that goes out is one the robot can do. Each wheel of the
+TurtleBot3 turns no faster than its motor does, about 0.21 m/s, and the
+firmware does not slow down for a turn it cannot make: a wheel asked for
+more just turns at its most and the robot goes straighter than it was told.
+So the mux scales speed and turn rate down together, keeping the curvature
+the controller asked for, until both wheels are within `wheel_speed`.
 """
 
 from geometry_msgs.msg import Twist
@@ -63,6 +70,9 @@ class CmdVelMux(Node):
         # of the noise; the robot has when this share of the returns have.
         self.declare_parameter('scan_change_threshold', 0.05)
         self.declare_parameter('scan_moved_share', 0.05)
+        # What the wheels can do: a little under the motors' 0.211 m/s.
+        self.declare_parameter('wheel_speed', 0.20)
+        self.declare_parameter('wheel_separation', 0.160)
 
         self.input_timeout = self.get_parameter('input_timeout').value
         self.stall_timeout = self.get_parameter('stall_timeout').value
@@ -73,6 +83,8 @@ class CmdVelMux(Node):
         self.unstick_speed = self.get_parameter('unstick_speed').value
         self.scan_change_threshold = self.get_parameter('scan_change_threshold').value
         self.scan_moved_share = self.get_parameter('scan_moved_share').value
+        self.wheel_speed = self.get_parameter('wheel_speed').value
+        self.half_separation = self.get_parameter('wheel_separation').value / 2.0
         publish_rate = self.get_parameter('publish_rate').value
 
         self.commands = {name: None for name, _ in INPUTS}
@@ -204,8 +216,19 @@ class CmdVelMux(Node):
             self.get_logger().info(f'Active input: {self.last_selected} -> {name}')
             self.last_selected = name
 
-        self.pub_cmd_vel.publish(command)
+        self.pub_cmd_vel.publish(self.within_reach(command))
         self.pub_active_input.publish(Bool(data=self.stall_override))
+
+    def within_reach(self, command):
+        """The command scaled down, if need be, to what the wheels can do."""
+        fastest = abs(command.linear.x) + abs(command.angular.z) * self.half_separation
+        if fastest <= self.wheel_speed:
+            return command
+        scale = self.wheel_speed / fastest
+        scaled = Twist()
+        scaled.linear.x = command.linear.x * scale
+        scaled.angular.z = command.angular.z * scale
+        return scaled
 
     def unstick(self, command, name, now):
         """Back off when the robot is driving into something.
