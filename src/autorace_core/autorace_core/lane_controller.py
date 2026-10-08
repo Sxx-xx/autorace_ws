@@ -33,6 +33,7 @@ on the start line a lane that is not yet in view means the camera is still
 coming up, and the robot stands still rather than go looking for it.
 """
 
+from collections import deque
 import math
 
 from geometry_msgs.msg import PointStamped
@@ -41,6 +42,7 @@ from nav_msgs.msg import Odometry
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from sensor_msgs.msg import Imu
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Bool
@@ -212,6 +214,25 @@ class LaneController(Node):
         # A turn the intersection mission orders on /control/turn_at_line
         # ('left'/'right'; 'hold' only keeps the automatic corner turns off).
         self.declare_parameter('ordered_turn_min_angle', 1.22)  # rad (70 deg) across the way
+        # Make the robot really turn as fast as asked. At low speed and a high
+        # turn rate the inner wheel is asked for almost nothing and the robot
+        # turned only 75 % of what was commanded (85-89 % at milder rates):
+        # it ran wider than the lane. The gyro's yaw rate is compared with the
+        # wanted one and the difference is added, P + I, never more than
+        # yaw_rate_boost_max times the wanted rate.
+        self.declare_parameter('yaw_rate_feedback', False)
+        self.declare_parameter('yaw_rate_kp', 0.5)
+        self.declare_parameter('yaw_rate_ki', 1.0)               # 1/s
+        self.declare_parameter('yaw_rate_i_max', 0.3)            # rad/s of correction from I
+        self.declare_parameter('yaw_rate_boost_max', 1.6)
+        # 'adaptive': learn from the gyro, slowly, what share of the commanded
+        # turn the robot really makes, and scale the command by its inverse.
+        # The gyro comes in over Wi-Fi 0.1-0.2 s late and at 15-20 Hz; a
+        # P + I loop on it ('pi') oscillated on the robot (2026-10-09).
+        self.declare_parameter('yaw_rate_mode', 'adaptive')
+        self.declare_parameter('yaw_rate_delay', 0.15)           # s from command to gyro
+        self.declare_parameter('yaw_rate_learn_time', 1.5)       # s, time constant of the share
+        self.declare_parameter('yaw_rate_min_share', 0.6)
         self.declare_parameter('ordered_turn_max_angle', 1.75)  # rad (100 deg)
         self.declare_parameter('ordered_turn_min_points', 15)
 
@@ -251,6 +272,21 @@ class LaneController(Node):
         self.ot_min = self.get_parameter('ordered_turn_min_angle').value
         self.ot_max = self.get_parameter('ordered_turn_max_angle').value
         self.ot_min_points = self.get_parameter('ordered_turn_min_points').value
+        self.yr_on = self.get_parameter('yaw_rate_feedback').value
+        self.yr_kp = self.get_parameter('yaw_rate_kp').value
+        self.yr_ki = self.get_parameter('yaw_rate_ki').value
+        self.yr_i_max = self.get_parameter('yaw_rate_i_max').value
+        self.yr_boost = self.get_parameter('yaw_rate_boost_max').value
+        self.yr_mode = self.get_parameter('yaw_rate_mode').value
+        self.yr_delay = self.get_parameter('yaw_rate_delay').value
+        self.yr_learn = self.get_parameter('yaw_rate_learn_time').value
+        self.yr_min_share = self.get_parameter('yaw_rate_min_share').value
+        self.yr_share = 1.0                       # measured / commanded turn rate
+        self.yr_sent = deque(maxlen=200)          # (time, linear, angular) sent
+        self.yaw_rate = None        # gyro, smoothed
+        self.yaw_rate_time = -1e9
+        self.yr_integral = 0.0
+        self.yr_last = None
 
         self.create_subscription(PointStamped, '/detect/lane_target', self.callback_target, 1)
         self.create_subscription(Float64, '/control/max_vel', self.callback_max_vel, 1)
@@ -258,6 +294,8 @@ class LaneController(Node):
         self.create_subscription(String, '/detect/lane_follow', self.callback_follow, 1)
         self.create_subscription(Bool, '/autorace/run_active', self.callback_run_active, 1)
         self.create_subscription(String, '/control/turn_at_line', self.callback_order, 1)
+        if self.yr_on:
+            self.create_subscription(Imu, '/imu', self.callback_imu, 5)
         self.pub_turn_done = self.create_publisher(Bool, '/control/turn_at_line/done', 1)
         if self.line_turn:
             self.create_subscription(Odometry, '/odom', self.callback_odom, 5)
@@ -389,7 +427,54 @@ class LaneController(Node):
                 direction = 1.0 if self.last_angular > 0.0 else -1.0
                 twist.angular.z = direction * self.recovery_angular
 
+        if self.yr_on:
+            twist.angular.z = self.yaw_rate_correct(twist.angular.z, now)
+            self.yr_sent.append((now, twist.linear.x, twist.angular.z))
         self.pub_cmd_vel.publish(twist)
+
+    def callback_imu(self, msg):
+        z = msg.angular_velocity.z
+        now = self.now()
+        self.yaw_rate = z if self.yaw_rate is None else 0.5 * self.yaw_rate + 0.5 * z
+        last = self.yaw_rate_time
+        self.yaw_rate_time = now
+        if self.yr_mode != 'adaptive' or not self.yr_sent:
+            return
+        # The command this reading answers: the one sent yaw_rate_delay ago.
+        when = now - self.yr_delay
+        _, v, w = min(self.yr_sent, key=lambda e: abs(e[0] - when))
+        if abs(w) < 0.3 or v < 0.02 or (z > 0) != (w > 0):
+            return
+        share = max(self.yr_min_share, min(1.2, z / w))
+        dt = min(0.2, max(0.0, now - last))
+        a = dt / (self.yr_learn + dt)
+        self.yr_share += a * (share - self.yr_share)
+
+    def yaw_rate_correct(self, wanted, now):
+        """The turn rate to command so that the gyro shows `wanted`."""
+        if self.yr_mode == 'adaptive':
+            out = wanted
+            if abs(wanted) >= 0.3 and now - self.yaw_rate_time < 0.5:
+                out = wanted / max(self.yr_min_share, min(1.0, self.yr_share))
+                out = max(-self.yr_boost * abs(wanted), min(self.yr_boost * abs(wanted), out))
+            out = max(-self.max_angular, min(self.max_angular, out))
+            return out
+        dt = 0.0 if self.yr_last is None else min(0.1, now - self.yr_last)
+        self.yr_last = now
+        if self.yaw_rate is None or now - self.yaw_rate_time > 0.3 or abs(wanted) < 0.05:
+            self.yr_integral = 0.0
+            return wanted
+        if self.yr_integral != 0.0 and (self.yr_integral > 0) != (wanted > 0):
+            self.yr_integral = 0.0       # the turn changed side: start over
+        error = wanted - self.yaw_rate
+        self.yr_integral = max(-self.yr_i_max, min(self.yr_i_max,
+                                                   self.yr_integral + self.yr_ki * error * dt))
+        out = wanted + self.yr_kp * error + self.yr_integral
+        limit = self.yr_boost * abs(wanted)
+        out = max(-limit, min(limit, out))
+        if (out > 0) != (wanted > 0):
+            out = 0.0                    # never turn the other way to brake a turn
+        return max(-self.max_angular, min(self.max_angular, out))
 
     def callback_odom(self, msg):
         q = msg.pose.pose.orientation
