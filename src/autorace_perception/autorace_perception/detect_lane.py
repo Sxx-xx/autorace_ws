@@ -112,6 +112,31 @@ def path_target(path, pose, distance, window, min_points, max_left):
     return target
 
 
+def straight_ahead(lines, max_angle, min_length, min_points, max_curvature=1.2):
+    """Whether the lines in view run straight on along the heading.
+
+    Each line with min_points or more (x ahead, y left, metres) gets
+    a straight fit within max_angle of the heading and a quadratic fit
+    y = a x^2 + ... bending less than max_curvature (1/m), over at least
+    min_length. Every line in view must, and at least one must be there.
+    """
+    seen = 0
+    for pts in lines:
+        if len(pts) < min_points:
+            continue
+        x, y = pts[:, 0], pts[:, 1]
+        if x.max() - x.min() < min_length:
+            return False
+        slope, _ = np.polyfit(x, y, 1)
+        if abs(np.arctan(slope)) > max_angle:
+            return False
+        a = np.polyfit(x, y, 2)[0]
+        if abs(2.0 * a) > max_curvature:
+            return False
+        seen += 1
+    return seen > 0
+
+
 def path_prune(path, pose, now, keep, max_age):
     """Forget points too old, or further than `keep` from the robot."""
     x, y, _ = pose
@@ -180,6 +205,14 @@ class DetectLane(Node):
         self.declare_parameter('lane.curve_enter_angle', 0.25)
         self.declare_parameter('lane.curve_exit_angle', 0.12)
         self.declare_parameter('lane.curve_exit_hold', 0.5)
+        # Leave the bend at once when the lines in view run straight on
+        # (within straight_max_angle at both ends of a stretch of at least
+        # straight_min_length), and forget the bend's path: the path is 1-2 s
+        # old and would go on turning the robot after the road has straightened.
+        self.declare_parameter('lane.straight_exit', False)
+        self.declare_parameter('lane.straight_max_angle', 0.14)
+        self.declare_parameter('lane.straight_min_length', 0.12)
+        self.declare_parameter('lane.straight_min_points', 20)
         self.declare_parameter('lane.path_lookahead', 0.15)
         # With a gain > 0 the path target follows the speed like the camera's:
         # path_lookahead_base + gain * v, within path_lookahead_min..max.
@@ -252,6 +285,10 @@ class DetectLane(Node):
         self.curve_exit_hold = self.get_parameter('lane.curve_exit_hold').value
         self.in_curve = False
         self.straight_since = None
+        self.straight_exit = self.get_parameter('lane.straight_exit').value
+        self.straight_max_angle = self.get_parameter('lane.straight_max_angle').value
+        self.straight_min_length = self.get_parameter('lane.straight_min_length').value
+        self.straight_min_points = self.get_parameter('lane.straight_min_points').value
         self.max_width = self.get_parameter('lane.max_width_ratio').value * self.lane_width
         self.fork_side = self.get_parameter('lane.fork_side').value
         self.centre_tolerance = self.get_parameter('lane.centre_tolerance').value
@@ -668,6 +705,16 @@ class DetectLane(Node):
                 self.in_curve = True
                 self.straight_since = None
                 self.get_logger().info('Bend ahead (%.0f deg): remembered path.' % np.degrees(angle))
+            elif self.in_curve and self.straight_exit and angle < self.curve_enter and straight_ahead(
+                    (yellow_points, white_points), self.straight_max_angle,
+                    self.straight_min_length, self.straight_min_points):
+                # (Only with the target near the heading too: straight lines and a
+                # target far off it mean the robot is off the lane's middle, and
+                # leaving then flipped bend/straight on every frame.)
+                self.in_curve = False
+                self.straight_since = None
+                self.path.clear()
+                self.get_logger().info('Straight lines ahead: camera target at once.')
             elif self.in_curve:
                 if angle < self.curve_exit:
                     self.straight_since = self.straight_since or now
