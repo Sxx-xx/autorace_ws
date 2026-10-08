@@ -14,24 +14,25 @@
 bev_projector:
   ros__parameters:
     camera:
-      height: 0.11          # Pi camera (imx219) lens above the floor, from the lane width (2026-10-08)
-      pitch: 0.543          # rad nose down (31 deg), from the lane lines vanishing point
-      forward_offset: 0.045 # lens ahead of the wheel axle (m) - MEASURE on the C920 mount
+      height: 0.155         # C920, measured 15.5 cm (hun, real-lane-pi 2026-10-08)
+      pitch: 0.128          # 7.3 deg down, from the lane lines' vanishing point (hun)
+      forward_offset: 0.060 # measured: lens 6 cm ahead of the wheel axle (hun)
     bev:
       pixels_per_meter: 1200.0
       width: 800
       height: 300
-      near: 0.12            # the Pi camera sees the floor from 0.12 m
+      near: 0.35            # the bottom image row reaches the floor ~0.34 m ahead
     blur_kernel: 5
 
 detect_lane:
   ros__parameters:
     bev:
       pixels_per_meter: 1200.0
-      near: 0.12
+      near: 0.35
     lane:
-      width_m: 0.25         # measured between the line centres on the course
-      control_lookahead: 0.15  # must lie in the BEV (from 0.12 m with the Pi camera)
+      width_m: 0.33         # practice track, centre to centre (hun's camera check 0.335).
+                            # 0.25 earlier was assumed, and the Pi camera height derived from it.
+      control_lookahead: 0.40  # inside the BEV (0.35..0.60 m with the C920 at 15.5 cm, 7.3 deg)
       max_target_angle: 0.7
     detect:
       # The C920 at 11 cm sees only a short stretch of each line (both lines
@@ -72,7 +73,7 @@ detect_stop_line:
   ros__parameters:
     bev:
       pixels_per_meter: 1200.0
-      near: 0.12
+      near: 0.35
     red:
       hue_margin: 10      # TUNE
       saturation_l: 120
