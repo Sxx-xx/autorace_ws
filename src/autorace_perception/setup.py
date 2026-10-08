@@ -25,6 +25,8 @@ setup(
             'detect_sign = autorace_perception.detect_sign:main',
             'detect_stop_line = autorace_perception.detect_stop_line:main',
             'detect_traffic_light = autorace_perception.detect_traffic_light:main',
+            'usb_camera = autorace_perception.usb_camera:main',
+            'web_view = autorace_perception.web_view:main',
         ],
     },
 )

@@ -1,0 +1,137 @@
+---
+# Perception tuning for the real TurtleBot3 Burger (launch/real_lane.launch.py).
+#
+# Started as a copy of perception_sim.yaml.  Values marked MEASURE are still
+# estimates and must be checked against the real camera: the bird's eye
+# view is only as right as the height, pitch and fx it is given.  Check it on
+# the web view (http://<robot>:8090): the painted lines should lie on the
+# magenta grid lines and stay parallel.  Lines that splay apart towards the
+# top mean the pitch is too small (or too large if they close in); lines
+# parallel but wider/narrower than the grid mean the height or fx is off.
+#
+# Distances are all from the wheel axle, not the camera.
+
+usb_camera:
+  ros__parameters:
+    device: /dev/video0
+    width: 432
+    height: 240
+    fps: 15
+    fourcc: MJPG
+    frame_id: camera_lane
+    hfov: 1.23              # C920, 78 deg diagonal -> 70.4 deg across at 16:9; used while fx is 0
+    fx: 0.0                 # from a calibration, when there is one
+    fy: 0.0
+    cx: 0.0
+    cy: 0.0
+    rotate_180: false
+
+web_view:
+  ros__parameters:
+    port: 8090
+    topics: ['/camera_lane/image_raw', '/camera/image_projected', '/detect/image_lane_bev', '/detect/image_lane']
+    labels:
+      - '1. 원본 카메라'
+      - '2. BEV + 격자 (자홍: 차로 중앙일 때 선 위치, 눈금 10 cm)'
+      - '3. BEV + 주행에 쓰는 선 (노랑: 노란선, 하늘: 흰선, 초록: 목표 후보 호, 빨강: 목표점)'
+      - '4. 로봇 주변 차선 지도 (회색 틀: 지금 카메라가 보는 범위, 그 밖은 주행 중 기억한 선. 파랑: 바퀴 축, 왼쪽 눈금: 축에서 앞으로 m)'
+    grid_topic: /camera/image_projected
+    bev:
+      pixels_per_meter: 1200.0
+      near: 0.35
+    lane:
+      width_m: 0.33
+
+bev_projector:
+  ros__parameters:
+    camera:
+      height: 0.155         # measured 15.5 cm; lens centre above the floor (m)
+      pitch: 0.128          # 7.3 deg down: from the lane lines' vanishing point (row 80 vs cy 119.5), 2026-10-08
+      forward_offset: 0.060  # measured: lens 6 cm ahead of the wheel axle
+    bev:
+      pixels_per_meter: 1200.0
+      width: 800
+      height: 300
+      near: 0.35            # the bottom image row reaches the floor ~0.34 m ahead
+    blur_kernel: 5
+
+detect_lane:
+  ros__parameters:
+    bev:
+      pixels_per_meter: 1200.0
+      near: 0.35
+    lane:
+      width_m: 0.33         # practice track, centre to centre (camera check: 0.335). Contest: 30 cm incl. lines -> ~0.27
+      # Look-ahead grows with speed: LAD = 0.20 + 1.5 * v, kept in 0.37..0.55 m
+      # (inside the view, near 0.35 .. near+0.25). v 0.12 -> 0.38, v 0.22 -> 0.53:
+      # a wide gap between bend and straight (was 0.30 + 0.6 v: 0.37 / 0.43).
+      control_lookahead: 0.20
+      lookahead_gain: 1.5     # s
+      lookahead_min: 0.37
+      lookahead_max: 0.55
+      # No bend on the course puts the lane centre further round than
+      # about 25 deg at that distance; the lone white line at the exit of
+      # a tight bend offered a point at 50-60 deg, which threw the robot
+      # over the line.
+      max_target_angle: 0.7
+      # Colour-blind: keep between whatever lines lie either side (no 'yellow is left' rule).
+      yellow_left: false
+    detect:
+      min_pixels: 2000
+      max_line_width_m: 0.08
+      white_yellow_gap_m: 0.02   # white within 2 cm of yellow = glare on the yellow tape, dropped
+      auto_threshold: true
+      lane:
+        white:
+          hue_l: 0
+          hue_h: 179
+          saturation_l: 0
+          saturation_h: 70
+          lightness_l: 105
+          lightness_h: 255
+        yellow:
+          hue_l: 10
+          hue_h: 127
+          saturation_l: 70
+          saturation_h: 255
+          lightness_l: 95
+          lightness_h: 255
+    reliability:
+      step: 5
+    process_every_n: 2
+    hold_last_center_sec: 0.4
+
+detect_stop_line:
+  ros__parameters:
+    bev:
+      pixels_per_meter: 1200.0
+      near: 0.35
+
+lane_controller:
+  ros__parameters:
+    max_speed: 0.22         # straight (Burger top speed; the motors manage ~0.21)
+    curve_speed: 0.12       # in a bend
+    # Bend or straight from the shape of the lines ahead (/detect/lane_curvature),
+    # not the steering: a robot weaving on a straight steered at 1.7-3.5 /m and
+    # stayed in 'bend' (2026-10-08). Offline fit: straight with 4 cm / 15 deg
+    # error reads up to 0.41, R 1.0 m reads 0.66, R 0.5 m reads 5.
+    curve_source: lane
+    curve_smoothing: 0.5
+    curve_enter_curvature: 0.8   # 1/m
+    curve_exit_curvature: 0.5    # 1/m: straight again below this ...
+    curve_exit_delay: 0.3        # s: ... for this long
+    standby_speed: 0.0      # stands still until /autorace/run_active is true
+    min_speed: 0.05
+    pursuit_gain: 1.0
+    max_angular: 2.0
+    cornering_rate: 0.825
+    lane_timeout: 0.5
+    recovery_speed: 0.05
+    recovery_angular: 0.45
+    recovery_timeout: 8.0
+
+cmd_vel_mux:
+  ros__parameters:
+    # Fastest wheel speed sent (m/s); the sim used 0.20. Above the motors'
+    # ~0.21 the command is only scaled down to this, keeping the curvature.
+    wheel_speed: 0.22
