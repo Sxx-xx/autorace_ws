@@ -33,7 +33,7 @@ detect_lane:
       width_m: 0.33         # practice track, centre to centre (hun's camera check 0.335).
                             # 0.25 earlier was assumed, and the Pi camera height derived from it.
       control_lookahead: 0.30  # inside the BEV (0.18..0.43 m with the camera at 15.3 cm, 32.7 deg)
-      # Look-ahead from the speed: 0.17 + 1.0 v, 0.22..0.35 m (0.35 at 0.18 m/s on a
+      # Look-ahead from the speed: 0.17 + 0.9 v, 0.22..0.35 m (0.34 at 0.19 m/s on a
       # straight, 0.22 at 0.05 m/s in a bend). All inside the BEV (0.18..0.43 m).
       # Steer on the remembered lane centre 0.18 m ahead of the axle (where the
       # wheels are about to be), laid down by the camera's target and carried
@@ -48,8 +48,11 @@ detect_lane:
       curve_enter_angle: 0.25   # 14 deg off the heading
       curve_exit_angle: 0.12    # 7 deg ...
       curve_exit_hold: 0.5      # ... for half a second
-      lookahead_speed_gain: 1.0
-      lookahead_base: 0.17
+      straight_exit: true       # ... or at once when the lines in view run straight on:
+      straight_max_angle: 0.14  #   within 8 deg of the heading,
+      straight_min_length: 0.12 #   over 12 cm or more (the bend's path is then forgotten)
+      lookahead_speed_gain: 0.9   # 1.0 and 1.2 tried (2026-10-09)
+      lookahead_base: 0.17        # 0.14 tried (2026-10-09): LAD 0.17 + 0.9 v, 0.22..0.35 m
       lookahead_min: 0.22
       lookahead_max: 0.35
       max_target_angle: 0.7
@@ -124,9 +127,19 @@ lane_controller:
     min_speed: 0.05
     # The run starts on the stop line: no creeping up to it before the green.
     standby_speed: 0.0
-    pursuit_gain: 1.15        # steer a little harder than plain pure pursuit (1.0..1.3 tried, 2026-10-08)
+    pursuit_gain: 1.17        # steer a little harder than plain pure pursuit (1.0..1.3 tried, 2026-10-09)
     max_angular: 2.0
-    cornering_rate: 0.55     # turn rate cap in bends (0.3..0.7 tried, 2026-10-08)
+    cornering_rate: 0.6      # turn rate cap in bends (0.3..0.7 tried, 2026-10-09)
+    # The robot turned only 75 % of the command in tight bends (inner wheel at
+    # ~0 m/s): make up the difference from the gyro (2026-10-09).
+    yaw_rate_feedback: false  # adaptive mode tried 2026-10-09; off by choice
+    # 'pi' (a P + I loop on the gyro) oscillated on the robot: the gyro comes
+    # 0.1-0.2 s late over Wi-Fi. 'adaptive' learns the share of the turn the
+    # robot really makes (over 1.5 s) and scales the command by its inverse.
+    yaw_rate_mode: adaptive
+    yaw_rate_delay: 0.15
+    yaw_rate_learn_time: 1.5
+    yaw_rate_boost_max: 1.4
     lane_timeout: 0.5
     recovery_speed: 0.05
     recovery_angular: 0.45
