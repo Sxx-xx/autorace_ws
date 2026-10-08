@@ -52,10 +52,12 @@ def launch_setup(context):
     sign_camera = LaunchConfiguration('sign_camera_topic').perform(context)
     lane_camera = LaunchConfiguration('lane_camera_topic').perform(context)
     if not sign_camera:
-        # The real robot reads the signs, the traffic light and the level
-        # crossing with its one C920 (15.5 cm up, 7.3 deg down: the picture
-        # reaches 14 deg above the horizon). The sim has a forward camera.
-        sign_camera = lane_camera if profile == 'real' else '/camera/image_raw'
+        # Both the real robot and the sim read the signs, the traffic light and
+        # the level crossing with a forward camera on /camera: on the robot the
+        # Pi's CSI camera, nearly level, while the C920 looks down at the lane
+        # (32.7 deg, nothing above the floor in view). Pass the lane camera's
+        # topic here to read the signs with that one instead.
+        sign_camera = '/camera/image_raw'
 
     nodes = []
 
@@ -123,7 +125,7 @@ def generate_launch_description():
         # Comma-separated missions to run; empty keeps the yaml's list.
         DeclareLaunchArgument('missions', default_value=''),
         # The camera for the signs, light and bar, and the lane camera (road).
-        # Empty: the lane camera on the real robot, /camera/image_raw in the sim.
+        # Empty: /camera/image_raw (the forward camera, the Pi camera on the robot).
         DeclareLaunchArgument('sign_camera_topic', default_value=''),
         DeclareLaunchArgument('lane_camera_topic', default_value='/camera_lane/image_raw'),
         DeclareLaunchArgument('lane_camera_info_topic', default_value='/camera_lane/camera_info'),
