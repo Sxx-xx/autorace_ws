@@ -50,6 +50,12 @@ def launch_setup(context):
     missions = LaunchConfiguration('missions').perform(context).replace(' ', '')
     compressed = LaunchConfiguration('compressed').perform(context).lower() == 'true'
     sign_camera = LaunchConfiguration('sign_camera_topic').perform(context)
+    lane_camera = LaunchConfiguration('lane_camera_topic').perform(context)
+    if not sign_camera:
+        # The real robot reads the signs, the traffic light and the level
+        # crossing with its one C920 (15.5 cm up, 7.3 deg down: the picture
+        # reaches 14 deg above the horizon). The sim has a forward camera.
+        sign_camera = lane_camera if profile == 'real' else '/camera/image_raw'
 
     nodes = []
 
@@ -67,7 +73,9 @@ def launch_setup(context):
     ))
 
     if compressed:
-        nodes.append(republish(sign_camera, use_sim_time, 'republish_forward'))
+        if sign_camera != lane_camera:
+            nodes.append(republish(sign_camera, use_sim_time, 'republish_forward'))
+        # One camera for both: lane_drive's decoder already decodes it.
         sign_camera = decoded_topic(sign_camera)
     sign_input = [('/detect/image_input', sign_camera)]
 
@@ -114,8 +122,9 @@ def generate_launch_description():
         DeclareLaunchArgument('auto_start', default_value='false'),
         # Comma-separated missions to run; empty keeps the yaml's list.
         DeclareLaunchArgument('missions', default_value=''),
-        # The forward camera (signs, light, bar) and the lane camera (road).
-        DeclareLaunchArgument('sign_camera_topic', default_value='/camera/image_raw'),
+        # The camera for the signs, light and bar, and the lane camera (road).
+        # Empty: the lane camera on the real robot, /camera/image_raw in the sim.
+        DeclareLaunchArgument('sign_camera_topic', default_value=''),
         DeclareLaunchArgument('lane_camera_topic', default_value='/camera_lane/image_raw'),
         DeclareLaunchArgument('lane_camera_info_topic', default_value='/camera_lane/camera_info'),
         # true: subscribe to the cameras' /compressed streams and decode here.
