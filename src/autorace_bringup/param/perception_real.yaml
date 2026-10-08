@@ -35,6 +35,19 @@ detect_lane:
       control_lookahead: 0.30  # inside the BEV (0.18..0.43 m with the camera at 15.3 cm, 32.7 deg)
       # Look-ahead from the speed: 0.17 + 1.0 v, 0.22..0.35 m (0.35 at 0.18 m/s on a
       # straight, 0.22 at 0.05 m/s in a bend). All inside the BEV (0.18..0.43 m).
+      # Steer on the remembered lane centre 0.18 m ahead of the axle (where the
+      # wheels are about to be), laid down by the camera's target and carried
+      # by the odometry: a bend is steered for when the robot gets there.
+      path_follow: true
+      path_lookahead: 0.15      # 0.15, 0.18, 0.20 tried as 'always' (2026-10-09)
+      path_mode: curve          # camera target on straights, the path once a bend is in sight
+      path_lookahead_gain: 0.5  # path target 0.10 + 0.5 v, 0.13..0.22 m (0.20 at 0.19 m/s, 0.15 at 0.10)
+      path_lookahead_base: 0.10
+      path_lookahead_min: 0.13
+      path_lookahead_max: 0.22
+      curve_enter_angle: 0.25   # 14 deg off the heading
+      curve_exit_angle: 0.12    # 7 deg ...
+      curve_exit_hold: 0.5      # ... for half a second
       lookahead_speed_gain: 1.0
       lookahead_base: 0.17
       lookahead_min: 0.22
@@ -107,13 +120,13 @@ lane_controller:
     # The motors do 0.211 m/s unloaded and less under load; 0.18 leaves the
     # outer wheel room to turn at speed. Raise towards 0.20 once the lane
     # following is clean on the real floor.
-    max_speed: 0.20         # the Burger's usable top: wheel goals of 0.211 m/s are dropped by the firmware (2026-10-08)
+    max_speed: 0.19         # 0.18..0.20 tried; 0.20 is the Burger's usable top (wheel goals of 0.211 m/s are dropped)
     min_speed: 0.05
     # The run starts on the stop line: no creeping up to it before the green.
     standby_speed: 0.0
     pursuit_gain: 1.15        # steer a little harder than plain pure pursuit (1.0..1.3 tried, 2026-10-08)
     max_angular: 2.0
-    cornering_rate: 0.6      # turn rate cap in bends (0.3..0.7 tried, 2026-10-08)
+    cornering_rate: 0.55     # turn rate cap in bends (0.3..0.7 tried, 2026-10-08)
     lane_timeout: 0.5
     recovery_speed: 0.05
     recovery_angular: 0.45
