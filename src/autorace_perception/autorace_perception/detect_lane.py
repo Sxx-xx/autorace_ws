@@ -80,6 +80,51 @@ LANE_BOTH = 2
 LANE_RIGHT_ONLY = 3
 
 
+def path_add(path, pose, target, now):
+    """Lay a lane-centre point seen from `pose` (x, y, yaw) down on the floor."""
+    x, y, yaw = pose
+    ahead, left = target
+    c, s = np.cos(yaw), np.sin(yaw)
+    path.append((x + ahead * c - left * s, y + ahead * s + left * c, now))
+
+
+def path_target(path, pose, distance, window, min_points, max_left):
+    """The remembered lane centre `distance` ahead of the robot now: (ahead, left) or None.
+
+    The centre points the camera saw further ahead have been carried along by
+    the odometry; the ones the robot has now come up to tell where the lane
+    goes at this spot. Their mean, within `window` of `distance`, is the target.
+    """
+    if len(path) < min_points:
+        return None
+    pts = np.array([(px, py) for px, py, _ in path])
+    x, y, yaw = pose
+    c, s = np.cos(yaw), np.sin(yaw)
+    dx, dy = pts[:, 0] - x, pts[:, 1] - y
+    ahead = c * dx + s * dy
+    left = -s * dx + c * dy
+    near = (ahead > 0.0) & (np.abs(np.hypot(ahead, left) - distance) < window)
+    if np.count_nonzero(near) < min_points:
+        return None
+    target = (float(ahead[near].mean()), float(left[near].mean()))
+    if abs(target[1]) > max_left:
+        return None
+    return target
+
+
+def path_prune(path, pose, now, keep, max_age):
+    """Forget points too old, or further than `keep` from the robot."""
+    x, y, _ = pose
+    while path and (now - path[0][2] > max_age):
+        path.popleft()
+    if len(path) > 2000:
+        for _ in range(len(path) - 2000):
+            path.popleft()
+    kept = [p for p in path if np.hypot(p[0] - x, p[1] - y) < keep]
+    path.clear()
+    path.extend(kept)
+
+
 class DetectLane(Node):
 
     def __init__(self):
@@ -121,6 +166,31 @@ class DetectLane(Node):
         # (v measured, m/s), within lookahead_min..max. Long on a straight at speed
         # (steady), short in a bend where the controller has slowed down (does not
         # cut the corner). Gain 0 keeps control_lookahead fixed.
+        # Follow the remembered lane centre where the robot is now, rather than
+        # the one the camera sees ahead: a bend seen at 0.3 m is steered for
+        # only when the wheels get there (path_lookahead ahead of the axle).
+        # Until there is path that near (the first ~0.2 m) the camera's target
+        # is used as before.
+        self.declare_parameter('lane.path_follow', False)
+        # 'always', or 'curve': the camera's target on straights, the remembered
+        # path only once a bend is in sight (camera target this far off the
+        # heading), back to the camera when it has been nearly straight ahead
+        # again for curve_exit_hold.
+        self.declare_parameter('lane.path_mode', 'always')
+        self.declare_parameter('lane.curve_enter_angle', 0.25)
+        self.declare_parameter('lane.curve_exit_angle', 0.12)
+        self.declare_parameter('lane.curve_exit_hold', 0.5)
+        self.declare_parameter('lane.path_lookahead', 0.15)
+        # With a gain > 0 the path target follows the speed like the camera's:
+        # path_lookahead_base + gain * v, within path_lookahead_min..max.
+        self.declare_parameter('lane.path_lookahead_gain', 0.0)
+        self.declare_parameter('lane.path_lookahead_base', 0.10)
+        self.declare_parameter('lane.path_lookahead_min', 0.13)
+        self.declare_parameter('lane.path_lookahead_max', 0.22)
+        self.declare_parameter('lane.path_window', 0.03)
+        self.declare_parameter('lane.path_min_points', 5)
+        self.declare_parameter('lane.path_keep', 0.8)
+        self.declare_parameter('lane.path_max_age', 4.0)
         self.declare_parameter('lane.lookahead_speed_gain', 0.0)
         self.declare_parameter('lane.lookahead_base', 0.17)
         self.declare_parameter('lane.lookahead_min', 0.22)
@@ -164,6 +234,24 @@ class DetectLane(Node):
         self.la_min = self.get_parameter('lane.lookahead_min').value
         self.la_max = self.get_parameter('lane.lookahead_max').value
         self.speed = 0.0
+        self.path_follow = self.get_parameter('lane.path_follow').value
+        self.path_lookahead = self.get_parameter('lane.path_lookahead').value
+        self.pla_gain = self.get_parameter('lane.path_lookahead_gain').value
+        self.pla_base = self.get_parameter('lane.path_lookahead_base').value
+        self.pla_min = self.get_parameter('lane.path_lookahead_min').value
+        self.pla_max = self.get_parameter('lane.path_lookahead_max').value
+        self.path_window = self.get_parameter('lane.path_window').value
+        self.path_min_points = self.get_parameter('lane.path_min_points').value
+        self.path_keep = self.get_parameter('lane.path_keep').value
+        self.path_max_age = self.get_parameter('lane.path_max_age').value
+        self.path = deque()
+        self.path_used = False
+        self.path_mode = self.get_parameter('lane.path_mode').value
+        self.curve_enter = self.get_parameter('lane.curve_enter_angle').value
+        self.curve_exit = self.get_parameter('lane.curve_exit_angle').value
+        self.curve_exit_hold = self.get_parameter('lane.curve_exit_hold').value
+        self.in_curve = False
+        self.straight_since = None
         self.max_width = self.get_parameter('lane.max_width_ratio').value * self.lane_width
         self.fork_side = self.get_parameter('lane.fork_side').value
         self.centre_tolerance = self.get_parameter('lane.centre_tolerance').value
@@ -563,6 +651,8 @@ class DetectLane(Node):
             target = (float(self.arc['ahead'][index]), float(self.arc['left'][index]))
             self.last_target = target
             self.last_target_time = now
+            if self.path_follow and self.pose is not None:
+                path_add(self.path, self.pose, target, now)
         elif self.last_target is not None and now - self.last_target_time < self.hold_last_center:
             # Bridge a dropped frame or two rather than handing back a gap in
             # the command stream; standing still is what ends a run.
@@ -571,6 +661,39 @@ class DetectLane(Node):
             target = None
 
         self.pub_state.publish(UInt8(data=state))
+
+        if self.path_follow and self.path_mode == 'curve' and index is not None:
+            angle = abs(np.arctan2(target[1], target[0]))
+            if not self.in_curve and angle > self.curve_enter:
+                self.in_curve = True
+                self.straight_since = None
+                self.get_logger().info('Bend ahead (%.0f deg): remembered path.' % np.degrees(angle))
+            elif self.in_curve:
+                if angle < self.curve_exit:
+                    self.straight_since = self.straight_since or now
+                    if now - self.straight_since > self.curve_exit_hold:
+                        self.in_curve = False
+                        self.get_logger().info('Straight again: camera target.')
+                else:
+                    self.straight_since = None
+        use_path = self.path_follow and (self.path_mode != 'curve' or self.in_curve)
+        if self.path_follow and self.odometry:
+            _, x, y, yaw, _ = self.odometry[-1]          # where the robot is now
+            path_prune(self.path, (x, y, yaw), now, self.path_keep, self.path_max_age)
+            on_path = None
+            if use_path:
+                distance = self.path_lookahead
+                if self.pla_gain > 0.0:
+                    distance = min(self.pla_max, max(self.pla_min,
+                                                     self.pla_base + self.pla_gain * self.speed))
+                on_path = path_target(self.path, (x, y, yaw), distance,
+                                      self.path_window, self.path_min_points, self.lane_width)
+            if on_path is not None:
+                target = on_path
+            if (on_path is not None) != self.path_used and self.path_mode != 'curve':
+                self.get_logger().info('Steering on the remembered path.' if on_path is not None
+                                       else 'Steering on the camera target (no path near).')
+            self.path_used = on_path is not None
 
         if target is not None:
             ahead, left = target
