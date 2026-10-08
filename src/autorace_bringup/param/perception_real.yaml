@@ -14,25 +14,31 @@
 bev_projector:
   ros__parameters:
     camera:
-      height: 0.155         # C920, measured 15.5 cm (hun, real-lane-pi 2026-10-08)
-      pitch: 0.128          # 7.3 deg down, from the lane lines' vanishing point (hun)
+      height: 0.153         # C920 lowered, measured 15.3 cm (2026-10-08)
+      pitch: 0.571          # 32.7 deg down: tape 0.50 m ahead of the axle on image row 46
       forward_offset: 0.060 # measured: lens 6 cm ahead of the wheel axle (hun)
     bev:
       pixels_per_meter: 1200.0
       width: 800
       height: 300
-      near: 0.35            # the bottom image row reaches the floor ~0.34 m ahead
+      near: 0.18            # the bottom image row reaches the floor ~0.17 m ahead
     blur_kernel: 5
 
 detect_lane:
   ros__parameters:
     bev:
       pixels_per_meter: 1200.0
-      near: 0.35
+      near: 0.18
     lane:
       width_m: 0.33         # practice track, centre to centre (hun's camera check 0.335).
                             # 0.25 earlier was assumed, and the Pi camera height derived from it.
-      control_lookahead: 0.40  # inside the BEV (0.35..0.60 m with the C920 at 15.5 cm, 7.3 deg)
+      control_lookahead: 0.30  # inside the BEV (0.18..0.43 m with the camera at 15.3 cm, 32.7 deg)
+      # Look-ahead from the speed: 0.17 + 1.0 v, 0.22..0.35 m (0.35 at 0.18 m/s on a
+      # straight, 0.22 at 0.05 m/s in a bend). All inside the BEV (0.18..0.43 m).
+      lookahead_speed_gain: 1.0
+      lookahead_base: 0.17
+      lookahead_min: 0.22
+      lookahead_max: 0.35
       max_target_angle: 0.7
     detect:
       # The C920 at 11 cm sees only a short stretch of each line (both lines
@@ -41,6 +47,7 @@ detect_lane:
       # yellow tape L 145 / S 99.
       min_pixels: 800
       max_line_width_m: 0.08
+      min_line_length_m: 0.06   # the speckled floor beyond the mat came through as white (2026-10-08)
       # TUNE: auto_threshold adapts the white threshold to the picture; keep
       # it on. The HSV bounds below are the sim's; check them with
       # /detect/image_lane on the real floor (black Formex is glossy).
@@ -73,7 +80,7 @@ detect_stop_line:
   ros__parameters:
     bev:
       pixels_per_meter: 1200.0
-      near: 0.35
+      near: 0.18
     red:
       hue_margin: 10      # TUNE
       saturation_l: 120
@@ -85,6 +92,15 @@ lane_controller:
     # Straight on at full speed, and at a bend stop and turn on the spot
     # until the lane is straight ahead again (2026-10-08).
     turn_in_place: false     # tried 2026-10-08: back to steering through bends, slower
+    # One line only and it lies across the way (a corner): drive up to half a
+    # lane short of it and turn on the spot by its angle; yellow across turns
+    # right, white across turns left. Bends under 70 deg stay pure pursuit.
+    line_turn: false          # turning at lines across the way: off again (2026-10-08)
+    line_turn_enter_angle: 1.222  # 70 deg
+    line_turn_max_angle: 1.745    # 100 deg: more means the line is on the wrong side (179 deg turn seen 2026-10-08)
+    line_turn_rate: 1.0
+    line_turn_half_width: 0.165   # half of the 0.33 m lane
+    line_turn_limit: 1.571        # never turn more than 90 deg at a line
     turn_enter_angle: 0.35    # 20 deg
     turn_exit_angle: 0.09     # 5 deg
     turn_rate: 0.25
@@ -97,7 +113,7 @@ lane_controller:
     standby_speed: 0.0
     pursuit_gain: 1.0
     max_angular: 2.0
-    cornering_rate: 0.5      # bends slower: 0.07 m/s at the 0.15 m radius of the practice bend
+    cornering_rate: 0.3      # turn rate cap in bends (0.5 and 0.7 tried, 2026-10-08)
     lane_timeout: 0.5
     recovery_speed: 0.05
     recovery_angular: 0.45

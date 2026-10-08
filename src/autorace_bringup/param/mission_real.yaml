@@ -22,6 +22,10 @@ traffic_light_mission:
 intersection_mission:
   ros__parameters:
     sign_streak: 3
+    # Lane following up to the island; at the line across its end, turn the
+    # sign's way on the spot, half a lane short of it (2026-10-08).
+    turn_at_line: false      # off with the line turns: follow the sign's side as before
+    turn_timeout: 15.0
     branch_distance: 2.0
 
 construction_mission:
