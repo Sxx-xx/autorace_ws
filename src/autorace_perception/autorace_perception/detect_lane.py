@@ -117,6 +117,14 @@ class DetectLane(Node):
         self.declare_parameter('lane.centre_tolerance', 0.025)
         # Lines are remembered over this much road behind the robot.
         self.declare_parameter('lane.memory_distance', 0.4)
+        # Look-ahead that follows the speed: lookahead_base + lookahead_speed_gain * v
+        # (v measured, m/s), within lookahead_min..max. Long on a straight at speed
+        # (steady), short in a bend where the controller has slowed down (does not
+        # cut the corner). Gain 0 keeps control_lookahead fixed.
+        self.declare_parameter('lane.lookahead_speed_gain', 0.0)
+        self.declare_parameter('lane.lookahead_base', 0.17)
+        self.declare_parameter('lane.lookahead_min', 0.22)
+        self.declare_parameter('lane.lookahead_max', 0.35)
         # A line further than this from a point says nothing about the lane
         # there.
         self.declare_parameter('lane.max_line_distance', 0.30)
@@ -128,6 +136,11 @@ class DetectLane(Node):
         # How much brighter than its surroundings a white line must be; 0 turns
         # the check off.
         self.declare_parameter('detect.white_contrast_min', 20)
+        # Pieces shorter than this (m, longest side) are not lines: a speckled
+        # floor beyond the edge of the course passes the colour and top-hat
+        # tests as hundreds of small bright flecks, and a shoe or a box as
+        # small yellow ones. 0 keeps everything (the sim's clean floor).
+        self.declare_parameter('detect.min_line_length_m', 0.0)
         self.declare_parameter('detect.auto_threshold', True)
         self.declare_parameter('detect.auto_threshold_low', 5000)
         self.declare_parameter('detect.auto_threshold_high', 35000)
@@ -146,6 +159,11 @@ class DetectLane(Node):
         self.lane_width = (self.get_parameter('lane.width_m').value
                            - self.get_parameter('lane.line_width_m').value)
         self.lookahead = self.get_parameter('lane.control_lookahead').value
+        self.la_gain = self.get_parameter('lane.lookahead_speed_gain').value
+        self.la_base = self.get_parameter('lane.lookahead_base').value
+        self.la_min = self.get_parameter('lane.lookahead_min').value
+        self.la_max = self.get_parameter('lane.lookahead_max').value
+        self.speed = 0.0
         self.max_width = self.get_parameter('lane.max_width_ratio').value * self.lane_width
         self.fork_side = self.get_parameter('lane.fork_side').value
         self.centre_tolerance = self.get_parameter('lane.centre_tolerance').value
@@ -160,6 +178,7 @@ class DetectLane(Node):
         self.contrast_kernel = np.ones((max(3, blob_px), max(3, blob_px)), np.uint8)
         self.edge_kernel = np.ones((7, 7), np.uint8)
         self.white_contrast_min = self.get_parameter('detect.white_contrast_min').value
+        self.min_line_px = self.get_parameter('detect.min_line_length_m').value * self.ppm
         self.auto_threshold = self.get_parameter('detect.auto_threshold').value
         self.auto_low = self.get_parameter('detect.auto_threshold_low').value
         self.auto_high = self.get_parameter('detect.auto_threshold_high').value
@@ -241,6 +260,7 @@ class DetectLane(Node):
             travelled += float(np.hypot(position.x - x, position.y - y))
         stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         self.odometry.append((stamp, position.x, position.y, float(yaw), travelled))
+        self.speed = 0.7 * self.speed + 0.3 * abs(msg.twist.twist.linear.x)
 
     def locate(self, stamp):
         """Set the pose to where the robot was at `stamp`.
@@ -276,6 +296,16 @@ class DetectLane(Node):
         wide_v = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.blob_kernel_v)
         return cv2.subtract(mask, cv2.bitwise_and(wide_h, wide_v))
 
+    def drop_specks(self, mask):
+        """Remove pieces shorter than a stretch of line (min_line_length_m)."""
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        if n <= 1:
+            return mask
+        longest = np.hypot(stats[:, cv2.CC_STAT_WIDTH], stats[:, cv2.CC_STAT_HEIGHT])
+        keep = longest >= self.min_line_px
+        keep[0] = False
+        return np.where(keep[labels], 255, 0).astype(np.uint8)
+
     def thin_bright(self, hsv):
         """Pixels brighter than their surroundings in a strip thinner than a line.
 
@@ -304,6 +334,8 @@ class DetectLane(Node):
         if only is not None:
             mask = cv2.bitwise_and(mask, only)
         mask = self.drop_blobs(mask)
+        if self.min_line_px > 0:
+            mask = self.drop_specks(mask)
         pixels = int(np.count_nonzero(mask))
 
         if self.auto_threshold:
@@ -339,7 +371,10 @@ class DetectLane(Node):
         self.map_far = self.near + image_shape[0] / self.ppm
         self.map_shape = (int((self.map_far + self.map_behind) * self.map_ppm),
                           int(2 * self.map_half_width * self.map_ppm))
-        # Candidate targets: the points `lookahead` from the axle.
+        self.build_arc()
+
+    def build_arc(self):
+        """Candidate targets: the points `lookahead` from the axle."""
         angle = np.linspace(-self.max_target_angle, self.max_target_angle, 221)
         ahead = self.lookahead * np.cos(angle)
         left = self.lookahead * np.sin(angle)
@@ -494,6 +529,11 @@ class DetectLane(Node):
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         if self.map_shape is None:
             self.build_map(image.shape[:2])
+        if self.la_gain > 0.0:
+            lookahead = min(self.la_max, max(self.la_min, self.la_base + self.la_gain * self.speed))
+            if abs(lookahead - self.lookahead) > 0.005:
+                self.lookahead = lookahead
+                self.build_arc()
 
         yellow_pixels, yellow_mask, self.reliability_yellow = self.mask_line(
             hsv, self.yellow, self.reliability_yellow)
