@@ -66,6 +66,19 @@ class LaneController(Node):
         self.declare_parameter('single_line_slew', 0.5)
         # Turn rate above which the robot slows down rather than turn faster.
         self.declare_parameter('cornering_rate', 0.6)
+        # Two-speed mode: max_speed on the straight, curve_speed in a bend
+        # (0 turns it off). A bend starts when the steering curvature passes
+        # curve_enter_curvature (1/m) and ends when it has stayed below
+        # curve_exit_curvature for curve_exit_delay seconds.
+        self.declare_parameter('curve_speed', 0.0)
+        self.declare_parameter('curve_enter_curvature', 1.0)
+        self.declare_parameter('curve_exit_curvature', 0.5)
+        self.declare_parameter('curve_exit_delay', 0.3)
+        # What decides straight or bend: 'lane' = the curvature of the lines
+        # ahead (/detect/lane_curvature, smoothed), falling back to 'steering'
+        # (the commanded arc) while that is missing.
+        self.declare_parameter('curve_source', 'lane')
+        self.declare_parameter('curve_smoothing', 0.5)
         self.declare_parameter('lane_timeout', 0.5)
         self.declare_parameter('recovery_speed', 0.05)
         self.declare_parameter('recovery_angular', 0.45)
@@ -82,6 +95,12 @@ class LaneController(Node):
         self.max_angular = self.get_parameter('max_angular').value
         self.single_line_slew = self.get_parameter('single_line_slew').value
         self.cornering_rate = self.get_parameter('cornering_rate').value
+        self.curve_speed = self.get_parameter('curve_speed').value
+        self.curve_enter = self.get_parameter('curve_enter_curvature').value
+        self.curve_exit = self.get_parameter('curve_exit_curvature').value
+        self.curve_exit_delay = self.get_parameter('curve_exit_delay').value
+        self.curve_source = self.get_parameter('curve_source').value
+        self.curve_smoothing = self.get_parameter('curve_smoothing').value
         self.lane_timeout = self.get_parameter('lane_timeout').value
         self.recovery_speed = self.get_parameter('recovery_speed').value
         self.recovery_angular = self.get_parameter('recovery_angular').value
@@ -95,7 +114,9 @@ class LaneController(Node):
         self.create_subscription(UInt8, '/detect/lane_state', self.callback_state, 1)
         self.create_subscription(String, '/detect/lane_follow', self.callback_follow, 1)
         self.create_subscription(Bool, '/autorace/run_active', self.callback_run_active, 1)
+        self.create_subscription(Float64, '/detect/lane_curvature', self.callback_lane_curvature, 1)
         self.pub_cmd_vel = self.create_publisher(Twist, '/cmd_vel/lane', 1)
+        self.pub_curve = self.create_publisher(Bool, '/control/curve', 1)
 
         self.target = None          # (ahead, left) of the axle, metres
         self.target_time = 0.0
@@ -108,6 +129,10 @@ class LaneController(Node):
         self.limit_time = 0.0
         self.recovering_since = None
         self.run_active = False
+        self.curve = False
+        self.lane_curvature = None   # smoothed |curvature| of the lines ahead
+        self.lane_curvature_time = 0.0
+        self.straight_since = None  # when the curvature last dropped below curve_exit
 
         self.create_timer(1.0 / rate, self.update)
 
@@ -119,7 +144,20 @@ class LaneController(Node):
         self.target_time = self.now()
 
     def callback_run_active(self, msg):
+        if msg.data != self.run_active:
+            self.get_logger().info('Run active' if msg.data else 'Run stopped')
         self.run_active = msg.data
+
+    def callback_lane_curvature(self, msg):
+        if msg.data != msg.data:     # NaN: no line long enough to fit
+            return
+        value = abs(msg.data)
+        if self.lane_curvature is None or self.now() - self.lane_curvature_time > self.lane_timeout:
+            self.lane_curvature = value
+        else:
+            a = self.curve_smoothing
+            self.lane_curvature = a * self.lane_curvature + (1.0 - a) * value
+        self.lane_curvature_time = self.now()
 
     def callback_max_vel(self, msg):
         """Take a mission's speed limit; it holds for as long as it keeps coming."""
@@ -149,8 +187,19 @@ class LaneController(Node):
                            min(self.single_line_slew, curvature - self.last_curvature))
                 curvature = self.last_curvature + step
             self.last_curvature = curvature
+            lane_fresh = (self.lane_curvature is not None
+                          and now - self.lane_curvature_time < self.lane_timeout)
+            if self.curve_source == 'lane' and lane_fresh:
+                self.update_curve(self.lane_curvature, now)
+            else:
+                self.update_curve(abs(curvature), now)
 
-            speed = self.max_speed if self.run_active else self.standby_speed
+            if not self.run_active:
+                speed = self.standby_speed
+            elif self.curve_speed > 0.0 and self.curve:
+                speed = self.curve_speed
+            else:
+                speed = self.max_speed
             if self.limit is not None and now - self.limit_time < self.limit_timeout:
                 speed = min(speed, self.limit)
             if abs(curvature) * speed > self.cornering_rate:
@@ -193,6 +242,24 @@ class LaneController(Node):
                 twist.angular.z = direction * self.recovery_angular
 
         self.pub_cmd_vel.publish(twist)
+        self.pub_curve.publish(Bool(data=self.curve))
+
+    def update_curve(self, curvature, now):
+        """Straight or bend, with hysteresis so the speed does not flicker."""
+        was = self.curve
+        if curvature > self.curve_enter:
+            self.curve = True
+            self.straight_since = None
+        elif curvature < self.curve_exit:
+            if self.straight_since is None:
+                self.straight_since = now
+            elif now - self.straight_since > self.curve_exit_delay:
+                self.curve = False
+        else:
+            self.straight_since = None
+        if self.curve != was and self.curve_speed > 0.0:
+            self.get_logger().info(
+                ('Curve' if self.curve else 'Straight') + f' (curvature {curvature:.2f} /m)')
 
     def shut_down(self):
         self.pub_cmd_vel.publish(Twist())
