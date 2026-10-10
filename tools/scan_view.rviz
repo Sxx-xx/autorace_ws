@@ -1,0 +1,97 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid (10 cm)
+      Enabled: true
+      Cell Size: 0.1
+      Plane Cell Count: 40
+      Reference Frame: base_link
+      Color: 120; 120; 120
+      Alpha: 0.4
+    - Class: rviz_default_plugins/Grid
+      Name: Grid (1 m)
+      Enabled: true
+      Cell Size: 1.0
+      Plane Cell Count: 8
+      Reference Frame: base_link
+      Color: 200; 200; 200
+      Alpha: 0.6
+    - Class: rviz_default_plugins/LaserScan
+      Name: LDS-02 scan
+      Enabled: true
+      Topic:
+        Value: /scan
+        Depth: 5
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        History Policy: Keep Last
+      Style: Points
+      Size (Pixels): 4
+      Color Transformer: FlatColor
+      Color: 255; 60; 60
+      Decay Time: 0
+    - Class: rviz_default_plugins/Map
+      Name: Construction map (laser hits)
+      Enabled: true
+      Topic:
+        Value: /detect/construction_map
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Alpha: 0.5
+      Color Scheme: costmap
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Mission state
+      Enabled: true
+      Topic:
+        Value: /viz/mission
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+    - Class: rviz_default_plugins/Image
+      Name: Construction view
+      Enabled: true
+      Topic:
+        Value: /detect/image_construction
+        Depth: 1
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Normalize Range: true
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: true
+      Marker Scale: 0.15
+      Frames:
+        All Enabled: false
+        base_link:
+          Value: true
+        base_scan:
+          Value: true
+    - Class: rviz_default_plugins/RobotModel
+      Name: Robot
+      Enabled: true
+      Description Topic:
+        Value: /robot_description
+        Durability Policy: Transient Local
+      Alpha: 0.6
+  Global Options:
+    Fixed Frame: base_link
+    Background Color: 30; 30; 30
+    Frame Rate: 30
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Top down
+      Scale: 300
+      X: 0.4
+      Y: 0
+      Angle: 1.5708
+Window Geometry:
+  Height: 950
+  Width: 1500
+  Construction view:
+    collapsed: false
