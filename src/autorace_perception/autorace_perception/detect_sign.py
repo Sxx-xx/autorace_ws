@@ -41,6 +41,12 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 
 
+# A blue sign's convex hull filling at least this much of its box is the square
+# parking sign; a disc's hull fills pi/4 (0.79) of it. Measured on the real
+# signs 26-28 px across: parking 0.89-0.90, direction discs 0.69-0.77.
+SQUARE_FILL = 0.84
+
+
 class DetectSign(Node):
 
     def __init__(self):
@@ -122,7 +128,13 @@ class DetectSign(Node):
             # square parking sign fills its box, an ellipse only pi/4 of it.
             if not 0.5 < w / h < 1.25:
                 continue
-            if not 0.85 < cv2.contourArea(contour) / (np.pi / 4 * w * h) < 1.12:
+            # Measured on the convex hull: the arrow can bite into the rim of a
+            # small, blurred disc (the real signs filled 0.83 of the ellipse,
+            # their hulls 0.88-0.98).
+            # Above SQUARE_FILL of its box it is the square parking sign, whose
+            # hull came to 1.13 of the ellipse and was read as a right arrow.
+            hull = cv2.contourArea(cv2.convexHull(contour))
+            if not 0.85 * np.pi / 4 * w * h < hull < SQUARE_FILL * w * h:
                 continue
             disc = self.filled(contour, box)
             arrow = cv2.bitwise_and(disc, cv2.bitwise_not(blue[y:y + h, x:x + w]))
@@ -145,8 +157,11 @@ class DetectSign(Node):
             # Seen from the side the square is narrower than tall.
             if not 0.5 < w / h < 1.25:
                 continue
-            # A square fills its box where a disc leaves the corners empty.
-            if cv2.contourArea(contour) < 0.88 * w * h:
+            # A square fills its box where a disc leaves the corners empty
+            # (pi/4 = 0.79). Measured on the convex hull: the real sign's
+            # rounded corners and ragged edge left 0.86-0.87 of the box filled
+            # 28 px across, its hull 0.89-0.90; a disc's hull stays near 0.79.
+            if cv2.contourArea(cv2.convexHull(contour)) < SQUARE_FILL * w * h:
                 continue
             face = self.filled(contour, box)
             patch = hsv[y:y + h, x:x + w]
