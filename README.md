@@ -1,7 +1,7 @@
-# AutoRace 2023 — TurtleBot3 자율주행
+# 2026 STEAM Cup 오토레이스 — TurtleBot3 자율주행
 
-오토레이스(AutoRace) v.2023.1 의 여섯 미션을 TurtleBot3 Burger 로 완주하기 위한 ROS 2
-워크스페이스다. Gazebo Harmonic 시뮬레이션에서 먼저 완주시키고, 같은 코드를 실제 로봇으로
+**2026 STEAM Cup 오토레이스 대회** 출전용 저장소다. 오토레이스(AutoRace) v.2023.1 규칙의 여섯 미션을
+TurtleBot3 Burger 로 완주하기 위한 ROS 2 워크스페이스다. Gazebo Harmonic 시뮬레이션에서 먼저 완주시키고, 같은 코드를 실제 로봇으로
 옮기고 있다.
 
 - ROS 2 **Jazzy**, Ubuntu 24.04, Gazebo Harmonic (gz-sim 8)
