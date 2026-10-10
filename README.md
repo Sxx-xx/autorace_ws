@@ -1,6 +1,7 @@
-# AutoRace — 실제 로봇 (`real` 브랜치)
+# 2026 STEAM Cup 오토레이스 — 실제 로봇 (`real` 브랜치)
 
-시뮬레이션(`master`)에서 완주한 AutoRace 스택을 실제 TurtleBot3 Burger 로 옮기는 브랜치다.
+**2026 STEAM Cup 오토레이스 대회** 출전용 저장소의 실차 브랜치다.
+시뮬레이션(`master`)에서 완주한 AutoRace 스택을 실제 TurtleBot3 Burger 로 옮긴다.
 여기에는 지금까지의 진행 과정과 현재 구성, 실행 방법, 남은 일을 적는다. 자세한 기록은
 [docs/REAL_ROBOT.md](docs/REAL_ROBOT.md), Pi 설치는 [docs/PI_SETUP.md](docs/PI_SETUP.md).
 
