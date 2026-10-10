@@ -58,6 +58,7 @@ back.
 from collections import deque
 import math
 
+import cv2
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 import numpy as np
@@ -116,6 +117,35 @@ class ParkingMission(Node):
         # The mission is over when the robot is heading along the road again,
         # or has driven this far from the lot without getting there.
         self.declare_parameter('exit_limit', 1.6)
+        # The aisle's direction from the yellow lines of this much lane before
+        # the lot, each side at least this long in view, and no more than
+        # this far off the robot's heading (else the robot's heading is used).
+        # The entrance to the lot on the real course: the left yellow line
+        # turns up the lane to the lot while the road, and its yellow line,
+        # carry straight on beyond it, so keeping to the left line drives past
+        # (2026-10-10). The robot turns in on an arc of this radius, centred
+        # on the lane to the lot, which lies half a lane past where the
+        # yellow line runs up it; it looks for the entrance over at most
+        # entrance_limit of road after the sign, then falls back to keeping
+        # left.
+        self.declare_parameter('find_entrance', True)
+        self.declare_parameter('entrance_half_lane', 0.165)
+        # The entrance is the gap in the left yellow line: empty for at least
+        # entrance_gap_min past where the line ended, the white line still on
+        # the right, the robot not turning; the middle of the lane to the lot
+        # is entrance_gap_half past the end of the line.
+        self.declare_parameter('entrance_gap_min', 0.06)
+        self.declare_parameter('entrance_gap_half', 0.15)
+        self.declare_parameter('entrance_radius', 0.17)
+        self.declare_parameter('entrance_speed', 0.08)
+        self.declare_parameter('entrance_limit', 2.5)
+        # After the turn in, up the lane to the lot between its two yellow
+        # lines this node drives itself: the lane follower takes no yellow line
+        # for the right edge of a lane, and steered out of it (2026-10-10).
+        self.declare_parameter('up_lane_speed', 0.08)
+        self.declare_parameter('aisle_line_memory', 0.30)
+        self.declare_parameter('aisle_line_length', 0.10)
+        self.declare_parameter('aisle_max_angle', 1.0)
         # The manager repeats the activation; without it the mission is over.
         self.declare_parameter('active_timeout', 1.0)
 
@@ -140,6 +170,17 @@ class ParkingMission(Node):
         self.turn_rate = value('turn_rate')
         self.park_time = value('park_time')
         self.exit_limit = value('exit_limit')
+        self.find_entrance = value('find_entrance')
+        self.entrance_half_lane = value('entrance_half_lane')
+        self.entrance_gap_min = value('entrance_gap_min')
+        self.entrance_gap_half = value('entrance_gap_half')
+        self.entrance_radius = value('entrance_radius')
+        self.entrance_speed = value('entrance_speed')
+        self.entrance_limit = value('entrance_limit')
+        self.up_lane_speed = value('up_lane_speed')
+        self.aisle_line_memory = value('aisle_line_memory')
+        self.aisle_line_length = value('aisle_line_length')
+        self.aisle_max_angle = value('aisle_max_angle')
         self.active_timeout = value('active_timeout')
 
         self.phase = None           # None while the mission is not running
@@ -157,6 +198,20 @@ class ParkingMission(Node):
         self.aisle_seen = (0.0, 0.0)
         self.aisle_correction = 0.0
         self.yellow = None          # (stamp, points) of the latest picture
+        # On the lane to the lot: (distance travelled, yellow points in the
+        # odometry frame) of the last stretch, for the direction of the aisle.
+        self.yellow_memory = deque()
+        # The entrance: where the last picture put it (along the robot's way),
+        # and the turn in: (x, y, yaw at the start, distance to drive before
+        # the arc).
+        self.entrance_seen = None
+        self.entrance = None
+        self.yellow_end = None      # distance travelled to where the left yellow line ends
+        self.yellow_start = None    # and to where it was first seen in this stretch
+        self.empty_pictures = 0     # pictures in a row with no left yellow line
+        self.yellow_side = None     # how far left of the robot that line runs
+        self.up_lane = False        # turned in: this node drives up the lane
+        self.up_lane_yaw = 0.0      # heading at the end of the turn in
         self.phase_start = 0.0      # time and distance travelled
         self.phase_travelled = 0.0
 
@@ -186,9 +241,21 @@ class ParkingMission(Node):
             if self.phase is None and self.odometry:
                 self.get_logger().info('Parking: keeping left for the lane to the lot.')
                 self.lot = None
+                self.yellow_memory.clear()
                 self.seen = {'left': 0, 'right': 0}
                 self.white_seen_at = self.odometry[-1][4]
-                self.enter('turn_in')
+                self.entrance_seen = None
+                self.entrance = None
+                self.yellow_end = None
+                self.yellow_start = None
+                self.empty_pictures = 0
+                self.yellow_side = None
+                self.up_lane = False
+                if self.find_entrance:
+                    self.get_logger().info('Parking: looking for the entrance to the lot.')
+                    self.enter('to_entrance')
+                else:
+                    self.enter('turn_in')
         elif self.phase is not None:
             self.get_logger().info(f'Parking: deactivated during {self.phase}.')
             self.phase = None
@@ -230,15 +297,63 @@ class ParkingMission(Node):
 
     def callback_yellow(self, msg):
         """Keep the yellow lines of a picture for when its white ones arrive."""
-        if self.phase in ('aisle', 'leave'):
+        if self.phase in ('aisle', 'leave', 'to_entrance', 'turn_in'):
             self.yellow = (msg.header.stamp,
                            point_cloud2.read_points_numpy(msg, field_names=('x', 'y')))
+        if self.phase == 'turn_in' and self.odometry:
+            points = point_cloud2.read_points_numpy(msg, field_names=('x', 'y'))
+            if len(points) == 0:
+                return
+            x, y, yaw, travelled = self.pose_at(msg.header.stamp)
+            cos_y, sin_y = math.cos(yaw), math.sin(yaw)
+            points = points[::2].astype(np.float64)
+            world = np.stack([x + cos_y * points[:, 0] - sin_y * points[:, 1],
+                              y + sin_y * points[:, 0] + cos_y * points[:, 1]], axis=1)
+            self.yellow_memory.append((travelled, world))
+            while travelled - self.yellow_memory[0][0] > self.aisle_line_memory:
+                self.yellow_memory.popleft()
+
+    def aisle_direction(self, x, y, yaw):
+        """The direction of the yellow lines either side of the lane to the lot.
+
+        They run in line with the aisle. The lane comes round a bend to the
+        lot, so the robot's own heading when the white shows can be well off
+        the aisle's (0.77 rad on 2026-10-10); the lines of the last stretch
+        are not. Each side's points are fitted with a straight line; None
+        when neither side is long enough to tell.
+        """
+        if not self.yellow_memory:
+            return None
+        world = np.concatenate([entry[1] for entry in self.yellow_memory])
+        cos_y, sin_y = math.cos(yaw), math.sin(yaw)
+        dx, dy = world[:, 0] - x, world[:, 1] - y
+        ahead, left = cos_y * dx + sin_y * dy, -sin_y * dx + cos_y * dy
+        angles, weights = [], []
+        for side in (left > 0.0, left < 0.0):
+            pts = np.stack([ahead[side], left[side]], axis=1).astype(np.float32)
+            if len(pts) < 30 or np.ptp(pts[:, 0]) < self.aisle_line_length:
+                continue
+            vx, vy, _, _ = cv2.fitLine(pts, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
+            if vx < 0.0:
+                vx, vy = -vx, -vy
+            angles.append(math.atan2(vy, vx))
+            weights.append(len(pts))
+        if not angles:
+            return None
+        angle = float(np.average(angles, weights=weights))
+        if abs(angle) > self.aisle_max_angle:
+            return None
+        return wrap(yaw + angle)
 
     def callback_white(self, msg):
-        if self.phase not in ('turn_in', 'aisle', 'leave') or not self.odometry:
+        if self.phase not in ('to_entrance', 'turn_in', 'aisle', 'leave') or not self.odometry:
             return
         points = point_cloud2.read_points_numpy(msg, field_names=('x', 'y'))
         x, y, yaw, travelled = self.pose_at(msg.header.stamp)
+        if self.phase == 'to_entrance':
+            if self.yellow is not None and self.yellow[0] == msg.header.stamp:
+                self.look_for_entrance(self.yellow[1], points, travelled)
+            return
         if self.phase != 'turn_in':
             # The aisle runs between white lines and the lane to it between
             # yellow ones, in line with them.
@@ -262,16 +377,82 @@ class ParkingMission(Node):
         middle = 0.0
         if len(left) > 20 and len(right) > 20:
             middle = float(np.median(left) + np.median(right)) / 2.0
-        # The lane is straight, and the lane follower has had its length to
-        # settle on it: the aisle runs the way the robot has been going.
+        # The aisle runs the way of the yellow lines up to it; without them,
+        # the way the robot has been going.
         recent = [entry[3] for entry in self.odometry if travelled - entry[4] < 0.15]
-        direction = math.atan2(sum(math.sin(a) for a in recent), sum(math.cos(a) for a in recent))
+        heading = math.atan2(sum(math.sin(a) for a in recent), sum(math.cos(a) for a in recent))
+        direction = self.aisle_direction(x, y, yaw)
+        if direction is None:
+            self.get_logger().warn('Parking: no yellow lines to set the aisle by; '
+                                   'taking the robot\'s heading.')
+            direction = heading
+        else:
+            self.get_logger().info(
+                'Parking: aisle %+.2f rad from the robot by the yellow lines '
+                '(heading of the last 15 cm %+.2f).'
+                % (wrap(direction - yaw), wrap(heading - yaw)))
         self.lot = (x + math.cos(yaw) * begins - math.sin(yaw) * middle,
                     y + math.sin(yaw) * begins + math.cos(yaw) * middle,
                     direction)
         self.get_logger().info(
             f'Parking: lot {begins:.2f} m ahead, aisle {middle:+.3f} m to the left.')
         self.enter('aisle')
+
+    def look_for_entrance(self, yellow, white, travelled_pic):
+        """Find the gap in the left yellow line where the lane to the lot leaves.
+
+        While the left yellow line is in view, how far along the road it runs
+        is kept (distance travelled to the axle plus how far ahead it is seen).
+        The entrance is where it stops: nothing yellow on the left over the
+        whole view, at least entrance_gap_min past its end, with the white line
+        still on the right and the robot not turning (in a bend the inner line
+        can slide out of view too). A bend in the line, taken for the entrance
+        before, was the road itself bending left (2026-10-10). The middle of
+        the lane to the lot is then entrance_gap_half past the end of the
+        line: straight on to an entrance_radius short of it, then a quarter
+        circle to the left.
+        """
+        _, _, _, yaw_now, travelled = self.odometry[-1]
+        recent = [entry[3] for entry in self.odometry if travelled - entry[4] < 0.15]
+        turning = bool(recent) and abs(wrap(yaw_now - recent[0])) > 0.15
+        left = yellow[(yellow[:, 1] > 0.03) & (yellow[:, 1] < 0.35)
+                      & (yellow[:, 0] > 0.15) & (yellow[:, 0] < 0.45)]
+        if self.yellow_side is not None:
+            # Only the line the robot has been running along: the far side of
+            # the gap shows up off to the left of it, and ended the gap
+            # before it could be seen whole (2026-10-10).
+            left = left[np.abs(left[:, 1] - self.yellow_side) < 0.06]
+        right = white[(white[:, 1] < -0.03) & (white[:, 0] > 0.15) & (white[:, 0] < 0.45)]
+        if len(left) >= 10:
+            end = travelled_pic + float(np.percentile(left[:, 0], 95))
+            if self.yellow_end is None or end - self.yellow_end > 0.25:
+                # A new stretch of line (or the first).
+                self.yellow_start = travelled_pic + float(np.percentile(left[:, 0], 5))
+            self.yellow_end = end if self.yellow_end is None else max(self.yellow_end, end)
+            side = float(np.median(left[:, 1]))
+            self.yellow_side = side if self.yellow_side is None else (
+                0.8 * self.yellow_side + 0.2 * side)
+            self.empty_pictures = 0
+            return
+        self.empty_pictures += 1
+        # The line has to have run along the road for a while first (not a
+        # glimpse leaving the construction zone), and be gone in three
+        # pictures in a row.
+        if (self.yellow_end is None or turning or len(right) < 10
+                or self.yellow_end - self.yellow_start < 0.30 or self.empty_pictures < 3):
+            return
+        empty = travelled_pic + 0.45 - self.yellow_end
+        if empty < self.entrance_gap_min:
+            return
+        centre = self.yellow_end + self.entrance_gap_half
+        straight_on = max(0.0, centre - self.entrance_radius - travelled)
+        _, x_now, y_now, _, _ = self.odometry[-1]
+        self.entrance = (x_now, y_now, yaw_now, straight_on)
+        self.get_logger().info(
+            'Parking: gap in the left yellow line %.2f m long, lane to the lot %.2f m ahead; '
+            'straight on %.2f m, then round to the left.'
+            % (empty, centre - travelled, straight_on))
+        self.enter('entrance')
 
     def see_aisle(self, points, yaw):
         """How far left of the middle of the aisle the camera shows the robot to be.
@@ -349,6 +530,73 @@ class ParkingMission(Node):
         twist.angular.z = max(-1.0, min(1.0, 2.5 * wrap(target - heading)))
         return twist
 
+    def up_lane_twist(self):
+        """Up the middle of the lane to the lot, between its yellow lines."""
+        _, _, _, yaw, _ = self.odometry[-1]
+        twist = Twist()
+        twist.linear.x = self.up_lane_speed
+        middle, angle = None, None
+        if self.yellow is not None:
+            points = self.yellow[1]
+            points = points[(points[:, 0] > 0.12) & (points[:, 0] < 0.45)].astype(np.float64)
+            sides, angles = {}, []
+            for name, side in (('left', points[:, 1] > 0.03), ('right', points[:, 1] < -0.03)):
+                pts = points[side]
+                if len(pts) < 15 or np.ptp(pts[:, 0]) < 0.08:
+                    continue
+                vx, vy, _, _ = cv2.fitLine(pts.astype(np.float32), cv2.DIST_HUBER,
+                                           0, 0.01, 0.01).ravel()
+                if vx < 0.0:
+                    vx, vy = -vx, -vy
+                side_angle = math.atan2(vy, vx)
+                # A line well off the way is not an edge of this lane: right
+                # after the turn in, the road's yellow line lay across the
+                # view and was steered along, back on to the road (2026-10-10).
+                if abs(side_angle) > 0.52:
+                    continue
+                sides[name] = float(np.median(pts[:, 1]))
+                angles.append(side_angle)
+            if 'left' in sides and 'right' in sides:
+                middle = (sides['left'] + sides['right']) / 2.0
+            elif 'left' in sides:
+                middle = sides['left'] - self.entrance_half_lane
+            elif 'right' in sides:
+                middle = sides['right'] + self.entrance_half_lane
+            if angles:
+                angle = float(np.mean(angles))
+        if middle is None:
+            # No line to go by: on along the heading the turn in ended on.
+            twist.angular.z = max(-0.5, min(0.5, 2.5 * wrap(self.up_lane_yaw - yaw)))
+            return twist
+        if angle is not None and abs(angle) < 0.6:
+            self.up_lane_yaw = wrap(yaw + angle)
+        steer = 3.0 * middle + 1.5 * (angle if angle is not None else 0.0)
+        twist.angular.z = max(-0.6, min(0.6, steer))
+        return twist
+
+    def turn_in_twist(self):
+        """Straight on from where the entrance was found, then round to the left."""
+        x_0, y_0, yaw_0, straight_on = self.entrance
+        _, x, y, yaw, _ = self.odometry[-1]
+        along = math.cos(yaw_0) * (x - x_0) + math.sin(yaw_0) * (y - y_0)
+        turned = wrap(yaw - yaw_0)
+        twist = Twist()
+        twist.linear.x = self.entrance_speed
+        if along < straight_on and turned < 0.1:
+            # Hold the heading the road was found on.
+            twist.angular.z = max(-0.5, min(0.5, -2.5 * turned))
+            return twist
+        if turned >= math.pi / 2.0 - 0.05:
+            self.get_logger().info('Parking: turned in, up the lane to the lot between its lines.')
+            self.white_seen_at = self.odometry[-1][4]
+            self.yellow_memory.clear()
+            self.up_lane = True
+            self.up_lane_yaw = yaw
+            self.enter('turn_in')
+            return Twist()
+        twist.angular.z = self.entrance_speed / self.entrance_radius
+        return twist
+
     def update(self):
         if self.phase is None or not self.odometry:
             return
@@ -361,7 +609,21 @@ class ParkingMission(Node):
             # Repeated until the manager takes the activation away.
             self.pub_done.publish(Bool(data=True))
             return
+        if self.phase == 'to_entrance':
+            # The lane follower keeps to the road; this node only watches.
+            self.pub_limit.publish(Float64(data=self.approach_speed))
+            if self.odometry[-1][4] - self.phase_travelled > self.entrance_limit:
+                self.get_logger().warn('Parking: no entrance found; keeping left for the lot.')
+                self.white_seen_at = self.odometry[-1][4]
+                self.enter('turn_in')
+            return
+        if self.phase == 'entrance':
+            self.pub_cmd_vel.publish(self.turn_in_twist())
+            return
         if self.phase == 'turn_in':
+            if self.up_lane:
+                self.pub_cmd_vel.publish(self.up_lane_twist())
+                return
             self.pub_follow.publish(String(data='left'))
             self.pub_limit.publish(Float64(data=self.approach_speed))
             return
