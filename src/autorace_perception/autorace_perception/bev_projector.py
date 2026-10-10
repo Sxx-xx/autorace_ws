@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 #
 # Copyright 2026 AutoRace Team
+# Based on turtlebot3_autorace_camera/image_projection.py
+#   Copyright 2018 ROBOTIS CO., LTD.
+#   Author: Leon Jung, [AuTURBO] Ki Hoon Kim (https://github.com/auturbo), Gilbert
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
