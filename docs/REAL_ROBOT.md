@@ -76,8 +76,9 @@ BEV 의 축척이 몇 % 틀어져 차선 폭 판정이 흔들린다.
   `ssh dd@172.20.10.3 'setsid nohup ~/start_robot.sh > ~/robot.log 2>&1 < /dev/null & disown'`.
 - 움직임 확인 (PC 에서 Twist 0.05 m/s 3 s, 0.3 rad/s 2 s): 오도메트리 전진 15.5 cm(목표 15),
   회전 33.9°(목표 34). 배터리 11.3 V. `/odom` 은 Wi-Fi 로 20 Hz (로봇은 30 Hz 발행).
-- **라이다는 LDS-01 이 아니다.** /dev/ttyUSB0(CP2102) 에서 **115200 baud** 로 LDRobot 계열
-  (LD06/LD08/LD14/LD19) 47 바이트 패킷(헤더 0x54 0x2C, 12 점, mm)이 나온다. 10 Hz 회전.
+- **라이다는 LDS-01 이 아니라 ROBOTIS LDS-02** (LDRobot LD08 기반, 10/9 확인). 바퀴 축 뒤 3.2 cm.
+  /dev/ttyUSB0(CP2102) 에서 **115200 baud** 로 LDRobot 47 바이트 패킷(헤더 0x54 0x2C, 12 점, mm)이 나온다. 10 Hz 회전.
+  LDS-02 의 최소 측정 거리는 약 0.16 m 라 그보다 가까운 값은 믿지 말 것 (공사 미션은 격자에 누적해서 쓰므로 괜찮다).
   `hls_lfcd_lds_driver`(LDS-01) 도 apt 의 `ld08_driver`(230400 고정) 도 못 읽어서
   `autorace_bringup/ld_lidar.py` 를 썼다 (`ros2 run autorace_bringup ld_lidar`, pyserial).
   LDS-01 처럼 1° 360 칸 LaserScan 을 낸다. Pi 에는 `~/ld_lidar.py` + `~/start_lidar.sh`
