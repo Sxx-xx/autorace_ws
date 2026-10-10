@@ -57,6 +57,7 @@ know where the road ends rather than where its middle is.
 
 from collections import deque
 
+from autorace_msgs.msg import MissionState
 import cv2
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PointStamped
@@ -341,10 +342,13 @@ class DetectLane(Node):
         self.last_target_time = 0.0
         self.follow = None
         self.follow_time = 0.0
+        self.mission_state = None
 
         self.create_subscription(Image, '/detect/image_input', self.callback_image, 1)
         self.create_subscription(String, '/detect/lane_follow', self.callback_follow, 1)
         self.create_subscription(Odometry, '/odom', self.callback_odom, 1)
+        self.create_subscription(
+            MissionState, '/autorace/mission_state', self.callback_mission_state, 5)
         self.pub_lane = self.create_publisher(Float64, '/detect/lane', 1)
         self.pub_offset = self.create_publisher(Float64, '/detect/lane_offset', 1)
         self.pub_target = self.create_publisher(PointStamped, '/detect/lane_target', 1)
@@ -400,6 +404,32 @@ class DetectLane(Node):
         _, x, y, yaw, travelled = min(self.odometry, key=lambda entry: abs(entry[0] - when))
         self.pose = (x, y, yaw)
         self.travelled = travelled
+
+    def callback_mission_state(self, msg):
+        """Forget the remembered lines and path when a mission hands back.
+
+        A mission drives as the lane follower never would: round obstacles,
+        turning on the spot, into a bay. The lines and lane centres remembered
+        meanwhile were carried by odometry through all that, and the stripes
+        of the construction posts went in with them, laid flat as white
+        lines. Taken back into lane following they made a fan of false lines
+        that steered the robot off the road after the construction zone
+        (2026-10-10), so lane following starts afresh from what is in view.
+        """
+        previous, self.mission_state = self.mission_state, msg.state
+        if (msg.state == MissionState.LANE_DRIVE and previous is not None
+                and previous not in (MissionState.STANDBY, MissionState.LANE_DRIVE)):
+            self.forget()
+            self.get_logger().info(
+                f'Mission {previous} over: remembered lines and path forgotten.')
+
+    def forget(self):
+        self.memory = []
+        self.path.clear()
+        self.path_used = False
+        self.in_curve = False
+        self.straight_since = None
+        self.last_target = None
 
     def callback_follow(self, msg):
         """Take the 'left' or the 'right' branch where the road forks."""
