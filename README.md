@@ -4,20 +4,88 @@
 여기에는 지금까지의 진행 과정과 현재 구성, 실행 방법, 남은 일을 적는다. 자세한 기록은
 [docs/REAL_ROBOT.md](docs/REAL_ROBOT.md), Pi 설치는 [docs/PI_SETUP.md](docs/PI_SETUP.md).
 
-## 현재 구성 (2026-10-08)
+코드를 여러 날 치를 한 번에 올린 때가 있어 커밋 이력만으로는 개발 순서가 보이지 않는다.
+날짜별로 무엇을 왜 바꿨는지는 [작업일지](#작업일지)에 있다.
+
+## 작업일지
+
+| 일지 | 기간 | 내용 |
+|---|---|---|
+| [worklog_2026-09-30.txt](docs/worklog_2026-09-30.txt) | 9/30 | 시뮬: 대회 맵과 Burger 로 교체, 차선 인식, 끼임 감지 |
+| [worklog_2026-10-01.txt](docs/worklog_2026-10-01.txt) | 10/1 ~ 10/2 | 시뮬: 갈림길 표지판·섬, 차선 추종 재작성, 갈림길·신호등 미션 |
+| [worklog_2026-10-02.txt](docs/worklog_2026-10-02.txt) | 10/2 ~ 10/6 | 시뮬: 공사·주차·차단바·터널 미션, 한 바퀴 완주, 속도 |
+| 이 README 의 [진행 과정](#진행-과정) 1~7 | 10/7 ~ 10/9 아침 | 실차: 로봇 올리기, 카메라, 표지판, 기억한 경로, 튜닝 |
+| [worklog_2026-10-09.txt](docs/worklog_2026-10-09.txt) | 10/9 오후 ~ 10/11 | 실차: 와이파이, 표지판 판정, 공사 미션, 차선 기억 비우기, 주차 입구·진입로, E-STOP·RViz 도구 |
+
+## ROBOTIS 원본에서 가져온 코드
+
+차선 인식 파이프라인의 두 노드는 ROBOTIS 의
+[turtlebot3_autorace](https://github.com/ROBOTIS-GIT/turtlebot3_autorace) (`jazzy` 브랜치, 커밋 `d2442ca`, Apache 2.0)
+를 포크해서 고쳤다. 원본 저작권 표시는 각 파일 머리말에 남겼다. 나머지 노드(미션들, `lane_controller`,
+`cmd_vel_mux`, 표지판·신호등·차단바 검출, 라이다·카메라 드라이버)는 새로 썼다.
+
+| 우리 파일 | 원본 |
+|---|---|
+| [`autorace_perception/bev_projector.py`](src/autorace_perception/autorace_perception/bev_projector.py) | [`turtlebot3_autorace_camera/image_projection.py`](https://github.com/ROBOTIS-GIT/turtlebot3_autorace/blob/d2442ca1670836db5fea6f4bfc649de929c4da0b/turtlebot3_autorace_camera/turtlebot3_autorace_camera/image_projection.py) |
+| [`autorace_perception/detect_lane.py`](src/autorace_perception/autorace_perception/detect_lane.py) | [`turtlebot3_autorace_detect/detect_lane.py`](https://github.com/ROBOTIS-GIT/turtlebot3_autorace/blob/d2442ca1670836db5fea6f4bfc649de929c4da0b/turtlebot3_autorace_detect/turtlebot3_autorace_detect/detect_lane.py) |
+
+**`bev_projector.py` (원본 245 줄 → 163 줄)**
+
+- 그대로 둔 것: 카메라 영상을 위에서 본 영상으로 펴는 역할, 토픽 이름(`/camera/image_input` → `/camera/image_output`),
+  출력 1000×600, 5×5 가우시안 블러, `cv2.warpPerspective` 로 펴기.
+- 바꾼 것: 원본은 영상 위 사다리꼴 네 점(`top_x`, `top_y`, `bottom_x`, `bottom_y`)을 손으로 맞춰 호모그래피를 만든다.
+  그 값은 카메라마다 다시 맞춰야 하고, 결과 영상의 축척을 모른다. 여기서는 **카메라 높이·숙인 각도·앞쪽 위치와
+  `camera_info` 의 내부 파라미터로 바닥 평면 호모그래피를 계산**한다. 그래서 출력이 1 m = 1200 px 의 고정 축척이고
+  맨 아래 줄이 로봇 앞 몇 m 인지 안다. 카메라를 바꾸거나 다시 달면 숫자 세 개만 고친다.
+  보정 모드(사다리꼴 그리기)와 압축 영상 입력은 뺐다 (디코드는 `republish` 가 한다).
+
+**`detect_lane.py` (원본 624 줄 → 833 줄)**
+
+- 그대로 둔 것: 흰선·노란선을 HSV 범위로 찾는 방식과 파라미터 이름·기본값(`detect.lane.white.*`, `detect.lane.yellow.*`),
+  잡힌 픽셀 수에 따라 밝기 하한을 5 씩 올리고 내리는 자동 조정, 선별 신뢰도(0~100) 토픽,
+  호환용 출력 `/detect/lane` 과 `/detect/lane_state` (0 없음, 1 노란선만, 2 둘 다, 3 흰선만).
+- 바꾼 것:
+  - **차선 가운데 구하는 법.** 원본은 슬라이딩 윈도로 선마다 x(y) 2차 곡선을 맞추고 그 곡선에서 반 차선 옆을
+    가운데로 본다. AutoRace 코스는 커브 반지름이 차선 폭만큼 작고 카메라가 앞 30 cm 만 봐서, 커브 안쪽 선은
+    화면 밖으로 나가고 바깥쪽 선은 화면을 가로지른다 (x(y) 곡선으로 못 나타낸다). 여기서는 로봇 앞
+    일정 거리의 원호 위에서 **노란선과 흰선까지 거리가 같은 점**(한 선만 보이면 그 선에서 반 차선인 점)을 고른다.
+    선까지 거리는 선이 어느 방향으로 달리든 같아서 커브에서도 직선처럼 차선 가운데를 지킨다.
+  - **미터 단위.** 위의 고정 축척 BEV 를 써서 모든 판단을 m 로 한다. 목표점(`/detect/lane_target`)과 선 점
+    (`/detect/lane_lines/*`, 미션들이 도로 가장자리를 찾는 데 쓴다)을 m 로 낸다.
+  - **기억.** 최근 0.4 m 동안 본 선을 오도메트리로 끌고 와 지금 영상에 겹친다 (화면 밖으로 나간 커브 안쪽 선).
+    커브에서는 기억한 차선 가운데 경로를 따라가고(`path_follow`), 보이는 선이 곧으면 바로 카메라 목표로 돌아온다
+    (`straight_exit`). 미션이 끝나면 이 기억을 버린다.
+  - **속도에 따른 제어점 거리** (`lookahead_speed_gain`), 갈림길에서 고를 쪽(`fork_side`, `/detect/lane_follow`),
+    목표점까지 선을 가로지르지 않는지 확인(`clear_way`).
+  - **잡음 거르기.** 8 cm 보다 넓은 덩어리와 짧은 조각(실차 6 cm 미만)을 버리고, 흰선은 주변보다 밝은 가는 줄만 쓴다
+    (노란 테이프 반사, 매트 밖 얼룩 바닥 때문).
+
+원본과 직접 비교하려면 (원본은 `src/turtlebot3_autorace` 에 받아 두며 저장소에는 올리지 않는다):
+
+```bash
+vcs import src < autorace.repos
+diff -u src/turtlebot3_autorace/turtlebot3_autorace_camera/turtlebot3_autorace_camera/image_projection.py \
+        src/autorace_perception/autorace_perception/bev_projector.py
+diff -u src/turtlebot3_autorace/turtlebot3_autorace_detect/turtlebot3_autorace_detect/detect_lane.py \
+        src/autorace_perception/autorace_perception/detect_lane.py
+```
+
+## 현재 구성 (2026-10-11)
 
 | 항목 | 내용 |
 |---|---|
 | 로봇 | TurtleBot3 Burger, Raspberry Pi 4 (Ubuntu 24.04, ROS 2 Jazzy), OpenCR |
 | 접속 | 핫스팟 172.20.10.0/28, Pi `dd@172.20.10.3` (호스트 `turtlebot1`), PC `.2` |
 | ROS 도메인 | **30** (Pi 와 PC 모두). 같은 핫스팟의 다른 로봇이 도메인 0 을 쓴다 |
-| 라이다 | LDRobot 계열 (LD06/LD19 프로토콜, 115200 baud). `ld_lidar` 노드, 10 Hz |
+| 라이다 | **ROBOTIS LDS-02** (LDRobot LD08 기반, 115200 baud), 바퀴 축 뒤 3.2 cm. `ld_lidar` 노드, 10 Hz |
 | 카메라 | **두 대.** 차선은 C920 (높이 15.3 cm, 32.7° 하향, 바닥 0.17~0.83 m), 표지판·신호등·차단바는 Pi CSI 카메라 (거의 수평, `/camera`) |
 | 영상 | 432×240 30 fps. C920 이 만든 MJPEG 를 Pi 가 손대지 않고 보낸다 (Pi CPU 약 9 %) |
 | 인식·제어 | 전부 PC 에서. 영상은 JPEG 로 Wi-Fi 를 건너 PC 에서 디코드 |
 | 차선 | 연습 코스 폭 **0.33 m** (선 중심 사이). BEV 0.18~0.43 m 앞, 제어점(LAD) = 0.17 + 1.0·속도, 0.22~0.35 m |
 | 속도 | 직선 0.19 m/s, 커브는 회전 0.6 rad/s(`cornering_rate`)를 넘지 않게 감속, 조향 `pursuit_gain` 1.17. 제자리 회전은 2.5 rad/s 이하 |
 | 조향 목표 | 직선은 카메라 목표(LAD = 0.17 + 0.9·속도, 0.22~0.35 m), 커브(목표가 14° 넘게 꺾임)는 오도메트리로 끌고 온 **기억한 경로** 위 0.10 + 0.5·속도 m 앞. 보이는 선이 곧게 뻗으면 그 자리에서 직선으로 돌아온다 |
+| 네트워크 | 핫스팟 172.20.10.x. **노트북 와이파이 절전 끔** (켜져 있으면 모든 토픽이 0.3~2 초씩 끊겨 차선 인식이 3~6 Hz 로 떨어진다) |
+| 미션 | 공사(장애물 3 개를 세고 마지막 것 옆에서 넘김), 주차(노란선 틈으로 입구, 진입로는 미션이 직접), 교차로. 미션이 끝나면 차선 인식의 기억을 비운다 |
 
 카메라 위치는 팀원 hun 의 `real-lane-pi` 브랜치에서 잰 값을 쓴다. 그 브랜치는 Pi 에서 직접
 인식하고 브라우저로 보는 방식이고, 이 브랜치는 PC 에서 인식하는 방식이다. 두 브랜치는 같은 파일
@@ -36,8 +104,13 @@ ros2 service call /reset std_srvs/srv/Trigger "{}"
 ros2 launch autorace_bringup lane_drive.launch.py
 ros2 topic pub -r 5 /autorace/run_active std_msgs/msg/Bool "{data: true}"   # 출발
 
-# PC: 미션 전체
+# PC: 미션 전체 (missions 를 비우면 yaml 의 다섯 미션이 모두 켜진다; 차선만은 missions:=none)
 ros2 launch autorace_bringup race.launch.py
+ros2 launch autorace_bringup race.launch.py auto_start:=true missions:=construction,parking
+
+# 비상 정지 창 (Enter 로 정지) / RViz 에 라이다·미션 상태
+python3 tools/estop.py
+python3 tools/mission_marker.py & rviz2 -d tools/scan_view.rviz
 
 # 보기 (제어 없이 디코드 → BEV → 차선 검출, 로봇은 안 움직인다)
 tools/lane_view.sh
@@ -55,7 +128,7 @@ Pi 홈에 복사해 쓴다. 화면을 띄울 때 Wayland 에서는 `QT_QPA_PLATF
 
 - Jazzy 의 `turtlebot3_node` 는 `/cmd_vel` 이 `TwistStamped` 라 우리 `Twist` 가 연결조차 안 됐다.
   `enable_stamped_cmd_vel: false` 로 띄운다 (`tools/pi/tb3_burger_twist.yaml`).
-- 라이다가 LDS-01 이 아니었다. LDRobot 프로토콜(115200 baud)을 읽는 `ld_lidar` 를 새로 썼고,
+- 라이다가 LDS-01 이 아니라 LDS-02 (LDRobot LD08 기반)였다. LDRobot 프로토콜(115200 baud)을 읽는 `ld_lidar` 를 새로 썼고,
   방향(정면 0°, 왼쪽 90°)을 로봇에서 확인했다.
 - CSI 카메라는 24.04 의 libcamera 가 둘 다 죽어서 레거시 V4L2 스택으로 읽는다 (`csi_camera`).
 
@@ -175,6 +248,21 @@ hun 위치(15.5 cm, 7.3°)로 잘 달리므로 지금은 출력하지 않았다.
 - **교차로 좌회전의 흔들림:** 같은 설정에서 좌회전 세 번 중 한 번은 섬 앞에서 일찍 꺾어 섬의 노란 바닥을 가로질렀다.
   표지판을 연속 3 프레임 읽는 시점이 매번 달라서(멀리서 띄엄띄엄 읽힘) "왼쪽 선 따라가기"로 바뀌는 위치도 달라진다.
 
+### 8. 와이파이, 표지판 판정, 공사·주차 미션 (10/9 오후 ~ 10/11)
+
+자세한 내용은 [worklog_2026-10-09.txt](docs/worklog_2026-10-09.txt).
+
+- **와이파이:** 같은 코드인데 차선이 나빠진 원인은 핫스팟과 노트북 와이파이 절전이었다 (차선 인식 21 → 3~6 Hz).
+  절전을 끄자 끊김이 0 번. 끊김 동안 끼임 탈출이 달리는 로봇을 후진시킨 것도 이 때문이었다.
+- **표지판:** 실물 주차 표지판(둥근 모서리)과 우회전 표지판(화살표가 테두리를 파먹음)이 모양 판정에서 아슬아슬하게
+  떨어졌다. 볼록 껍질로 재고 사각/원을 0.84 로 가른다. 주차 437/451, 우회전 360/360 프레임.
+- **공사 미션:** 장애물 수를 세어 3 개를 다 지나야 끝내고, 굽은 길에서는 넘겨받는 띠를 원호로, 도로에서 45° 넘게
+  돌지 않게, 앞보기 0.22 m, 여유 0.11 / 0.25 m, 마지막 장애물 옆에서 바로 넘긴다. 마지막 확인 주행에서 3 개 통과 후
+  차선을 99 % 잡았다.
+- **차선 인식:** 미션이 끝나면 기억한 선·경로를 버린다 (공사 중 쌓인 쓰레기를 따라 매트 밖으로 가던 것).
+- **주차 미션:** 통로 방향을 진입로 노란선으로, 입구를 왼쪽 노란선의 틈으로, 진입로는 미션이 직접 달린다.
+  마지막 두 가지는 아직 주행으로 확인하지 못했다.
+
 ## 남은 일
 
 - [ ] **C920 거치대 고정.** 주행 중 카메라가 위로 들려 차선 지도가 무너진 주행이 여러 번 있었다.
@@ -183,7 +271,11 @@ hun 위치(15.5 cm, 7.3°)로 잘 달리므로 지금은 출력하지 않았다.
 - [ ] **커브에서 차선 가운데 유지.** C920 주행에서 흰선 하나만 보고 달린 시간이 49 %,
       제어점 좌우 편차 15 cm. hun 브랜치의 속도 연동 제어점과 노란선 반사 필터를 옮겨 볼 것.
 - [ ] 노란선 왼쪽의 반사 띠가 선 폭을 7~10 cm 로 키운다 (검출기는 8 cm 넘는 선을 버린다).
-- [ ] 신호등, 차단바, 주차, 터널을 실물 소품으로 하나씩.
+- [ ] **주차:** 노란선 틈 입구와 진입로 주행을 실제로 확인, 칸에서 나와 도로로 돌아가기까지.
+- [ ] **공사:** 같은 장애물을 두 번 등록하는 일 (두 번째 장애물 옆에서 넘겨줄 수 있다).
+- [ ] cmd_vel_mux 끼임 탈출이 스캔·odom 이 끊긴 동안에는 판단하지 않게. Pi 와이파이 절전 영구로 끄기.
+- [ ] 표지판 판정 수정을 표지판마다 전체 바퀴 3 번 이상으로 확인.
+- [ ] 신호등, 차단바, 터널을 실물 소품으로 하나씩.
 - [ ] 시뮬의 카메라도 실차와 같은 위치로 바꾸고 전체 랩으로 확인 (`master`).
 
 주행 기록(ros2 bag)은 PC 의 `bags/` 에 있고 저장소에는 올리지 않는다.
