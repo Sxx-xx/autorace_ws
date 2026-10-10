@@ -30,11 +30,27 @@ intersection_mission:
 
 construction_mission:
   ros__parameters:
-    speed: 0.16
-    lookahead: 0.11
-    robot_radius: 0.095
-    comfort_clearance: 0.20
+    # First runs on the real course slowly: the gap past a block is only
+    # ~7 cm wider than the robot. 0.16 once it gets through cleanly.
+    speed: 0.10
+    # LDS-02 centre 3.2 cm behind the wheel axle (measured 2026-10-09).
+    lidar_offset: -0.032
+    # 0.11 stepped aside steeply, square across the road; 0.16 still too
+    # short by eye (2026-10-10).
+    lookahead: 0.22
+    # Kept further off the obstacles than in the sim (0.095 / 0.20): the real
+    # robot brushed them turning past (2026-10-10). The axle still needs only
+    # robot_radius from an obstacle to get through; the line may be driven on.
+    robot_radius: 0.11
+    comfort_clearance: 0.25
     line_slack: 0.01
+    # The real zone (50 cm road) holds 3 obstacles; on 2026-10-10 the mission
+    # ended after the first and the lane follower met the second.
+    obstacle_count: 3
+    next_obstacle_distance: 1.0
+    # The zone sits between two bends: the first obstacle came in from the
+    # side 6 cm off. The strip now follows the arc in a bend; reach further.
+    bend_takeover_distance: 0.35
 
 parking_mission:
   ros__parameters:

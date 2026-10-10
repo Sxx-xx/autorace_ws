@@ -239,6 +239,33 @@ class ConstructionMission(Node):
         self.declare_parameter('leave_distance', 0.4)
         # Without an obstacle after this much road the mission gives up.
         self.declare_parameter('approach_limit', 4.0)
+        # The zone holds this many obstacles: the mission is over only once
+        # they are all behind, steering by the lane between them (on the real
+        # course the next one stood beyond clear_distance, and the mission
+        # handed back after the first). 0 counts none.
+        self.declare_parameter('obstacle_count', 3)
+        # With fewer behind, the mission still ends after this much clear road.
+        self.declare_parameter('next_obstacle_distance', 1.0)
+        # The zone ends in a bend: past the last obstacle the outer white line
+        # shows across the way, and the straight-road path, or the lane point
+        # off that line, drove out of the bend (2026-10-10). A white line this
+        # near, at least this far off square to the robot's way, ends the
+        # mission once an obstacle has been passed: the lane follower takes
+        # the bend.
+        # The robot is not turned further off the road than this (rad) while
+        # it gets round an obstacle: at the second obstacle on 2026-10-10 it
+        # stood square across the road (88 deg) to step aside, then swung its
+        # front back into the obstacle turning straight again. At the limit it
+        # goes on slantwise.
+        self.declare_parameter('max_road_angle', 0.785)
+        # The last obstacle counts as passed once its centre is this far behind
+        # the axle (0: level with it), and the lane follower takes over at
+        # once, while the robot still faces down the road: waiting until it
+        # was rear_clearance behind left the robot turned off the road with no
+        # line in view (2026-10-10).
+        self.declare_parameter('last_obstacle_release', 0.0)
+        self.declare_parameter('white_across_reach', 0.45)
+        self.declare_parameter('white_across_angle', 1.05)
         # The manager repeats the activation; without it the mission is over.
         self.declare_parameter('active_timeout', 1.0)
         self.declare_parameter('publish_debug_image', True)
@@ -269,6 +296,12 @@ class ConstructionMission(Node):
         self.cluster_cells = value('cluster_cells')
         self.leave_distance = value('leave_distance')
         self.approach_limit = value('approach_limit')
+        self.obstacle_count = value('obstacle_count')
+        self.next_obstacle_distance = value('next_obstacle_distance')
+        self.max_road_angle = value('max_road_angle')
+        self.last_obstacle_release = value('last_obstacle_release')
+        self.white_across_reach = value('white_across_reach')
+        self.white_across_angle = value('white_across_angle')
         self.active_timeout = value('active_timeout')
         self.publish_debug = value('publish_debug_image')
 
@@ -298,6 +331,9 @@ class ConstructionMission(Node):
         self.lane_time = 0.0
         self.met = False            # an obstacle has been seen standing in the road
         self.by_the_lane = False    # the obstacles passed, steering for the lane's point
+        # Obstacles met in the road: [x, y (odometry), cells, passed].
+        self.tracked = []
+        self.white_now = (0.0, None)  # (time, points of the latest picture)
 
         self.bridge = CvBridge()
 
@@ -419,22 +455,30 @@ class ConstructionMission(Node):
     def in_the_way_of(self, points):
         """Which laser returns stand where the robot is about to drive.
 
-        That is the strip ahead of it. In a bend the strip sweeps across
-        whatever stands beyond the bend, to either side of the road, so while
-        the lane follower is steering round one only the near end of the strip
-        counts.
+        That is the strip ahead of it. In a bend a straight strip sweeps across
+        whatever stands beyond the bend, to either side of the road, and misses
+        an obstacle coming in from the inside of it (met 6 cm off on the real
+        course), so while the lane follower is steering round one the strip
+        bends with the arc it drives, and reaches less far along it.
         """
         ahead, left = points[:, 0], points[:, 1]
-        reach = self.takeover_distance
         if self.lane_target is not None and self.now() - self.lane_time < 0.5:
             target_ahead, target_left = self.lane_target
             curvature = 2.0 * target_left / (target_ahead ** 2 + target_left ** 2)
             if abs(curvature) > self.bend_curvature:
-                reach = self.bend_takeover_distance
-        return (ahead > 0.0) & (ahead < reach) & (np.abs(left) < self.takeover_half_width)
+                radius = 1.0 / curvature           # + to the left
+                off_arc = np.abs(np.hypot(ahead, left - radius) - abs(radius))
+                angle = np.arctan2(ahead, np.sign(radius) * (radius - left))
+                along_arc = abs(radius) * angle
+                return ((angle > 0.0) & (along_arc < self.bend_takeover_distance)
+                        & (off_arc < self.takeover_half_width))
+        return ((ahead > 0.0) & (ahead < self.takeover_distance)
+                & (np.abs(left) < self.takeover_half_width))
 
     def callback_lines(self, msg, colour):
         points = point_cloud2.read_points_numpy(msg, field_names=('x', 'y'))
+        if colour == 'white':
+            self.white_now = (self.now(), points.astype(np.float64))
         pose = self.pose_at(msg.header.stamp)
         if pose is None or len(points) == 0:
             return
@@ -621,6 +665,80 @@ class ConstructionMission(Node):
                          30.0 * (1.0 + (radius - self.line_slack - edge) / 0.01), 0.0)
         return cost, blocked
 
+    def track_obstacles(self, along, across, x, y):
+        """Keep each obstacle met in the road; return how many are behind the axle.
+
+        The standing cells in the road are joined into clusters, as in
+        road_is_clear, and each cluster's centre is kept in the odometry frame:
+        a centre within 0.15 m of a kept one is the same obstacle. One is
+        passed once its centre is rear_clearance behind the axle.
+        """
+        left, right = self.walls['yellow'], self.walls['white']
+        if left is None:
+            left, right = 0.35, -0.35
+        near = ((along > -0.5) & (along < self.clear_distance)
+                & (across > right + 0.01) & (across < left - 0.01))
+        if np.count_nonzero(near) >= 3:
+            picture = np.zeros((int(1.4 / 0.02) + 2, int((self.clear_distance + 0.5) / 0.02) + 2),
+                               np.uint8)
+            column = np.int_((along[near] + 0.5) / 0.02)
+            row = np.int_((across[near] + 0.7) / 0.02)
+            inside = ((row >= 0) & (row < picture.shape[0])
+                      & (column >= 0) & (column < picture.shape[1]))
+            picture[row[inside], column[inside]] = 1
+            picture = cv2.dilate(picture, np.ones((3, 3), np.uint8))
+            count, _, stats, centres = cv2.connectedComponentsWithStats(picture)
+            cos_d, sin_d = math.cos(self.direction), math.sin(self.direction)
+            for k in range(1, count):
+                if stats[k, cv2.CC_STAT_AREA] < self.cluster_cells:
+                    continue
+                c_along = centres[k][0] * 0.02 - 0.5
+                c_across = centres[k][1] * 0.02 - 0.7
+                cx = x + cos_d * c_along - sin_d * c_across
+                cy = y + sin_d * c_along + cos_d * c_across
+                for obstacle in self.tracked:
+                    if math.hypot(obstacle[0] - cx, obstacle[1] - cy) < 0.15:
+                        if not obstacle[3]:
+                            # Follow the centre as more of the obstacle is seen.
+                            obstacle[0], obstacle[1] = cx, cy
+                        break
+                else:
+                    # Only what first shows up ahead of the axle is an obstacle
+                    # to pass: at takeover in a bend, cells beside and behind
+                    # the robot were counted as passed at once (2026-10-10).
+                    if c_along <= 0.0:
+                        continue
+                    self.tracked.append([cx, cy, int(stats[k, cv2.CC_STAT_AREA]), False])
+                    self.get_logger().info(
+                        f'Construction: obstacle {len(self.tracked)} in the road, '
+                        f'{c_along:.2f} m ahead, {c_across:+.2f} m across.')
+        passed = sum(1 for obstacle in self.tracked if obstacle[3])
+        for obstacle in self.tracked:
+            if not obstacle[3]:
+                o_along, _ = self.road_coordinates(
+                    np.array([[obstacle[0], obstacle[1]]]), x, y)
+                last = self.obstacle_count > 0 and passed >= self.obstacle_count - 1
+                release = self.last_obstacle_release if last else self.rear_clearance
+                if o_along[0] < -release:
+                    passed += 1
+                    obstacle[3] = True
+                    self.get_logger().info(
+                        f'Construction: passed obstacle {self.tracked.index(obstacle) + 1}.')
+        return sum(1 for obstacle in self.tracked if obstacle[3])
+
+    def white_across(self, now):
+        """Whether the latest picture shows a white line across the way ahead."""
+        when, points = self.white_now
+        if points is None or now - when > 0.3:
+            return False
+        near = points[(points[:, 0] > 0.0) & (points[:, 0] < self.white_across_reach)]
+        if len(near) < 30 or np.ptp(near[:, 1]) < 0.15:
+            return False
+        vx, vy, _, _ = cv2.fitLine(near.astype(np.float32), cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
+        # Angle of the line off the robot's way: 0 along it, pi/2 square across.
+        off_way = math.atan2(abs(vy), abs(vx))
+        return off_way > self.white_across_angle
+
     def road_is_clear(self, along, across):
         """Whether no obstacle stands in the road beside or ahead of the robot."""
         left, right = self.walls['yellow'], self.walls['white']
@@ -666,6 +784,7 @@ class ConstructionMission(Node):
             if self.in_the_way >= 2:
                 self.get_logger().info('Construction: obstacle ahead, taking over.')
                 self.phase = 'avoid'
+                self.tracked = []
                 self.direction = yaw
                 self.road_found = False
                 self.met = False
@@ -682,6 +801,13 @@ class ConstructionMission(Node):
         # Clear means the obstacles have been passed, not that none has been
         # made out in the road yet.
         clear = self.road_is_clear(along, across)
+        passed = self.track_obstacles(along, across, x, y)
+        if self.obstacle_count > 0 and passed >= self.obstacle_count:
+            # The last one is beside the robot: hand over now, facing the road.
+            self.get_logger().info(
+                f'Construction: last of {passed} obstacles beside the robot, done.')
+            self.phase = 'done'
+            return
         if not clear:
             self.met = True
             self.clear_count = 0
@@ -695,9 +821,33 @@ class ConstructionMission(Node):
         if self.clear_count >= 3:
             if self.cleared_at is None:
                 self.cleared_at = travelled
+            if self.obstacle_count > 0 and passed >= self.obstacle_count:
+                # All behind: the lane follower takes the bend that ends the zone.
+                self.get_logger().info(
+                    f'Construction: all {passed} obstacles passed, road clear, done.')
+                self.phase = 'done'
+                return
+            # Not while an obstacle met is still ahead: weaving between them
+            # the zone's own edge can show across the way (2026-10-10).
+            if 0 < passed == len(self.tracked) and self.white_across(now):
+                self.get_logger().info(
+                    f'Construction: white line across the way after {passed} obstacles, '
+                    'the zone ends in a bend, done.')
+                self.phase = 'done'
+                return
+            if passed < self.obstacle_count:
+                # More to come: carry on by the lane until the next one is in
+                # the road, or give up after a stretch of clear road.
+                if travelled - self.cleared_at > self.next_obstacle_distance:
+                    self.get_logger().warn(
+                        f'Construction: {passed} of {self.obstacle_count} obstacles '
+                        'passed, road clear, done.')
+                    self.phase = 'done'
+                    return
             # Hand back to the lane follower as soon as it has a lane.
-            if now - self.lane_time < 0.3 or travelled - self.cleared_at > self.leave_distance:
-                self.get_logger().info('Construction: road clear, done.')
+            elif now - self.lane_time < 0.3 or travelled - self.cleared_at > self.leave_distance:
+                self.get_logger().info(
+                    f'Construction: {passed} obstacles passed, road clear, done.')
                 self.phase = 'done'
                 return
 
@@ -739,8 +889,20 @@ class ConstructionMission(Node):
         if abs(bearing) > 1.0:
             # Too far round to drive an arc to: turn on the spot first.
             twist.angular.z = math.copysign(self.cornering_rate, bearing)
+        else:
+            twist = self.arc(ahead, left)
+        return self.within_road_angle(twist, heading)
+
+    def within_road_angle(self, twist, heading):
+        """Turn no further off the road than max_road_angle; bring it back past it."""
+        over = abs(heading) - self.max_road_angle
+        if over < 0.0 or twist.angular.z * heading <= 0.0:
             return twist
-        return self.arc(ahead, left)
+        # Turning further off: hold the slant (a little back towards the road
+        # if already past it) and keep moving, rather than turn on the spot.
+        twist.angular.z = -math.copysign(min(self.max_angular, 2.0 * over), heading)
+        twist.linear.x = max(twist.linear.x, self.min_speed)
+        return twist
 
     def arc(self, ahead, left):
         """Drive the arc from the axle, along the heading, through a point."""
