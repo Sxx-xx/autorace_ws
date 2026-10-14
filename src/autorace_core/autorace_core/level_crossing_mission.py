@@ -95,6 +95,13 @@ class LevelCrossingMission(Node):
         self.declare_parameter('open_scans', 5)
         # The manager repeats the activation; without it the mission is over.
         self.declare_parameter('active_timeout', 1.0)
+        # False for a bar the laser cannot see (the real course's bar hangs
+        # below the scan plane, by the rules): the robot stops where the
+        # camera first sees the bar down and goes on once the camera has
+        # not seen it down for open_time. The camera catches the bar in a
+        # fraction of its pictures, so this is seconds, not pictures.
+        self.declare_parameter('use_laser', True)
+        self.declare_parameter('open_time', 2.0)
 
         def value(name):
             return self.get_parameter(name).value
@@ -113,6 +120,8 @@ class LevelCrossingMission(Node):
         self.open_pictures = value('open_pictures')
         self.open_scans = value('open_scans')
         self.active_timeout = value('active_timeout')
+        self.use_laser = value('use_laser')
+        self.open_time = value('open_time')
 
         self.phase = None           # None while the mission is not running
         self.active_time = 0.0
@@ -120,6 +129,7 @@ class LevelCrossingMission(Node):
         self.open_count = 0         # and without
         self.picture_time = 0.0
         self.bar_picture_time = -1e9   # when the camera last saw the bar at all
+        self.closed_time = -1e9     # when it last saw the bar down
         self.bar_distance = None    # from the axle, by the laser
         self.bar_time = 0.0
         self.bar_travelled = 0.0    # distance travelled when it was measured
@@ -159,6 +169,7 @@ class LevelCrossingMission(Node):
                 # the laser has seen the bar does its going count.
                 self.empty_scans = 0
                 self.bar_seen = False
+                self.closed_time = self.active_time
         elif self.phase is not None:
             self.get_logger().info(f'Level crossing: deactivated during {self.phase}.')
             self.phase = None
@@ -170,6 +181,7 @@ class LevelCrossingMission(Node):
         if msg.data == BAR_CLOSED:
             self.closed_count += 1
             self.open_count = 0
+            self.closed_time = self.picture_time
         else:
             self.closed_count = 0
             self.open_count += 1
@@ -178,6 +190,8 @@ class LevelCrossingMission(Node):
             self.pub_trigger.publish(String(data='level_crossing'))
 
     def callback_scan(self, msg):
+        if not self.use_laser:
+            return
         ranges = np.asarray(msg.ranges, dtype=np.float32)
         seen = np.isfinite(ranges) & (ranges > msg.range_min + 1e-3)
         angles = msg.angle_min + np.arange(len(ranges)) * msg.angle_increment
@@ -223,6 +237,17 @@ class LevelCrossingMission(Node):
         if self.phase == 'done':
             # Repeated until the manager takes the activation away.
             self.pub_done.publish(Bool(data=True))
+            return
+
+        if not self.use_laser:
+            # Camera only: stand where the bar was seen down, until it has
+            # not been seen down for a while.
+            if now - self.closed_time > self.open_time:
+                self.get_logger().info(
+                    f'Level crossing: the bar not seen down for {self.open_time:.1f} s, going on.')
+                self.phase = 'done'
+                return
+            self.pub_cmd_vel.publish(Twist())
             return
 
         if (self.bar_seen and self.open_count >= self.open_pictures

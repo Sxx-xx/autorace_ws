@@ -9,6 +9,7 @@
 mission_manager:
   ros__parameters:
     enabled_missions: 'intersection,construction,parking,level_crossing,tunnel'
+    repeatable_missions: 'level_crossing'
     green_streak: 5
     sign_streak: 3
     mission_timeout:
@@ -66,6 +67,11 @@ parking_mission:
 
 level_crossing_mission:
   ros__parameters:
+    # The real bar hangs below the laser's scan plane (competition rule):
+    # the laser never saw it (2026-10-14). Camera only: stop where the bar
+    # is first seen down, go on 2 s after it was last seen down.
+    use_laser: false
+    open_time: 2.0
     stop_gap: 0.12
     hold_gain: 0.6
     hold_speed: 0.15
@@ -134,13 +140,34 @@ detect_level_crossing:
   ros__parameters:
     # The bar must be red/white striped (print C4 red and white): the
     # detector looks for solid red patches in a row.
+    # The real bar's red is a dark maroon to the Pi camera (value 50-90,
+    # saturation 130-180 on 2026-10-14); at value_l 80 it found nothing.
     red:
       hue_margin: 10
-      saturation_l: 100
-      value_l: 80
+      saturation_l: 90
+      value_l: 40
     stripe:
       min_area: 40
       min_fill: 0.6
       min_thickness: 9    # pixels at 320x240: how near the bar must be
     open_angle: 0.35
+    # The bar is below the camera; the red seats along the wall are above
+    # the horizon (row ~100 of 240) and made a "closed bar" of two patches.
+    roi_top: 0.5
+    min_stripes: 3
+    # The real bar: a round pole, its red a dark maroon shaded below, so
+    # each stripe shows as a sliver. Over the 2026-10-14 bags this caught the
+    # bar down in 5-10 of 15 pictures a second from ~0.5 m, nothing else.
+    fragments:
+      enabled: true
+      saturation_l: 60
+      value_l: 25
+      min_area: 10
+      line_tolerance: 9.0
+      spacing_min: 12.0
+      spacing_max: 110.0
+      spacing_ratio: 2.3
+      white_value_l: 110
+      white_saturation_h: 90
+      white_miss: 1
     publish_debug_image: true

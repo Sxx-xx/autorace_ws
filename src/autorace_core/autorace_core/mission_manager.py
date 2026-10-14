@@ -97,6 +97,10 @@ class MissionManager(Node):
         # Comma-separated; empty for all of them. A section test runs with
         # the one mission of its section, so the others' signs are let be.
         self.declare_parameter('enabled_missions', '')
+        # Missions that may run again after they are done: stopping at a bar
+        # the camera says is down costs only time, and a bar mistaken once
+        # must not leave the real one ignored (2026-10-14).
+        self.declare_parameter('repeatable_missions', '')
 
         self.green_streak = self.get_parameter('green_streak').value
         self.sign_streak = self.get_parameter('sign_streak').value
@@ -104,6 +108,8 @@ class MissionManager(Node):
         self.standby_timeout = self.get_parameter('standby_timeout').value
         enabled = self.get_parameter('enabled_missions').value.replace(' ', '')
         self.enabled = set(enabled.split(',')) if enabled else set(MISSIONS.keys())
+        repeatable = self.get_parameter('repeatable_missions').value.replace(' ', '')
+        self.repeatable = set(repeatable.split(',')) if repeatable else set()
         self.timeouts = {
             name: self.get_parameter(f'mission_timeout.{name}').value for name in MISSIONS
         }
@@ -195,7 +201,7 @@ class MissionManager(Node):
             return
         if mission not in self.enabled:
             return
-        if mission in self.completed:
+        if mission in self.completed and mission not in self.repeatable:
             return
         if self.state != MissionState.LANE_DRIVE:
             # Not running yet, or busy: remember a sign for afterwards.
