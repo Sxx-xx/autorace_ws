@@ -1,4 +1,3 @@
 #!/bin/bash
-source /opt/ros/jazzy/setup.bash
-export ROS_DOMAIN_ID=30
-exec python3 $HOME/ld_lidar.py
+source "$(dirname "$(readlink -f "$0")")/pi_env.sh"
+exec ros2 run autorace_bringup ld_lidar

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import TwistStamped
-from sensor_msgs.msg import Image
+from geometry_msgs.msg import Twist
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import CompressedImage
 from nav_msgs.msg import Odometry
-from cv_bridge import CvBridge
 import cv2
 import numpy as np
 import math
@@ -14,11 +14,16 @@ class LevelCrossingTiltNode(Node):
         super().__init__('level_crossing_tilt_node')
 
         # 1. 퍼블리셔 및 서브스크라이버 설정
-        self.cmd_pub = self.create_publisher(TwistStamped, '/cmd_vel', 10)
-        self.image_sub = self.create_subscription(Image, '/camera/image_raw', self.image_callback, 10)
+        # 로봇(turtlebot3_node, tb3_burger.yaml)은 /cmd_vel 을 Twist 로 받는다 (TwistStamped 는 연결이 안 됨).
+        # Reliable + depth 1: 잃은 명령은 다시 보내되 최신 것 하나만. race.launch.py 의 cmd_vel_mux 와
+        # 같은 토픽이므로 레이스와 동시에 띄우지 않는다.
+        self.cmd_pub = self.create_publisher(
+            Twist, '/cmd_vel', QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE))
+        # Pi 카메라는 JPEG(/camera/image_raw/compressed)만, Best Effort 로 낸다: raw 토픽은 없다.
+        self.image_sub = self.create_subscription(
+            CompressedImage, '/camera/image_raw/compressed', self.image_callback,
+            qos_profile_sensor_data)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
-        
-        self.bridge = CvBridge()
         
         # 2. 상태 변수
         self.current_yaw_speed = 0.0
@@ -37,11 +42,10 @@ class LevelCrossingTiltNode(Node):
         self.current_yaw_speed = abs(msg.twist.twist.angular.z)
 
     def image_callback(self, msg):
-        try:
-            # ROS 이미지를 OpenCV 이미지로 변환
-            cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-        except Exception as e:
-            self.get_logger().error(f"Image Convert Error: {e}")
+        # JPEG 를 OpenCV 이미지로 변환
+        cv_image = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_COLOR)
+        if cv_image is None:
+            self.get_logger().error("Image decode error", throttle_duration_sec=5.0)
             return
 
         # 1. 빨간색 패턴 필터링 (HSV 변환)
@@ -91,18 +95,16 @@ class LevelCrossingTiltNode(Node):
         self.drive_robot()
 
     def drive_robot(self):
-        twist = TwistStamped()
-        twist.header.stamp = self.get_clock().now().to_msg()
-        twist.header.frame_id = 'base_link'
+        twist = Twist()
 
         if self.is_bar_down:
             # 멈춤
-            twist.twist.linear.x = 0.0
-            twist.twist.angular.z = 0.0
+            twist.linear.x = 0.0
+            twist.angular.z = 0.0
         else:
             # 직진 (안전한 저속 0.05 m/s)
-            twist.twist.linear.x = 0.05
-            twist.twist.angular.z = 0.0
+            twist.linear.x = 0.05
+            twist.angular.z = 0.0
 
         self.cmd_pub.publish(twist)
 

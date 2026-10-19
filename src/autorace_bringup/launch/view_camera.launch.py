@@ -18,10 +18,15 @@
 
 The robot's cameras send best effort, which a viewer's default reliable
 subscription does not match; republish (launch_helpers) reads them best effort
-and hands the decoded image to the viewer on this machine.
+and decodes onto <ns>/image_view, not the detectors' <ns>/image_decoded (two
+publishers there would hand every detector each frame twice).
+
+While race.launch.py runs it already decodes both cameras: decode:=false then
+shows its <ns>/image_decoded and adds nothing on the Wi-Fi.
 
   ros2 launch autorace_bringup view_camera.launch.py                      # /camera (CSI)
   ros2 launch autorace_bringup view_camera.launch.py camera_topic:=/camera_lane/image_raw
+  ros2 launch autorace_bringup view_camera.launch.py decode:=false        # during a race
 """
 
 from launch import LaunchDescription
@@ -35,15 +40,24 @@ from autorace_bringup.launch_helpers import decoded_topic, republish
 def nodes(context):
     camera_topic = LaunchConfiguration('camera_topic').perform(context)
     name = camera_topic.strip('/').split('/')[0]
+    if LaunchConfiguration('decode').perform(context).lower() != 'true':
+        return [viewer(name, decoded_topic(camera_topic))]
+    view_topic = camera_topic.rsplit('/', 1)[0] + '/image_view'
     return [
-        republish(camera_topic, False, f'republish_view_{name}'),
-        Node(package='rqt_image_view', executable='rqt_image_view', name=f'view_{name}',
-             arguments=[decoded_topic(camera_topic)], output='screen'),
+        republish(camera_topic, False, f'republish_view_{name}', view_topic),
+        viewer(name, view_topic),
     ]
+
+
+def viewer(name, topic):
+    return Node(package='rqt_image_view', executable='rqt_image_view', name=f'view_{name}',
+                arguments=[topic], output='screen')
 
 
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('camera_topic', default_value='/camera/image_raw'),
+        DeclareLaunchArgument('decode', default_value='true',
+                              description='false: show race.launch.py\'s decoded image instead'),
         OpaqueFunction(function=nodes),
     ])

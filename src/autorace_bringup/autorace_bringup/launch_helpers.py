@@ -23,8 +23,11 @@ def decoded_topic(image_topic):
     return base + '/image_decoded'
 
 
-def republish(image_topic, use_sim_time, name):
+def republish(image_topic, use_sim_time, name, out_topic=None):
     """image_transport republish: <image_topic>/compressed -> decoded raw image.
+
+    out_topic defaults to decoded_topic(image_topic), what the detectors read;
+    a viewer passes its own so that it never doubles their frames.
 
     Run on the PC: only the JPEG frames cross the Wi-Fi, and the robot's raw
     topic goes unsubscribed (DDS sends nothing nobody listens to). The input is
@@ -46,6 +49,6 @@ def republish(image_topic, use_sim_time, name):
                      f'qos_overrides.{image_topic}/compressed.subscription.depth': 1}],
         remappings=[
             ('in/compressed', image_topic + '/compressed'),
-            ('out', decoded_topic(image_topic)),
+            ('out', out_topic or decoded_topic(image_topic)),
         ],
     )
