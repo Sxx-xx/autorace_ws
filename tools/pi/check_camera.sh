@@ -38,8 +38,10 @@ for d in sorted(glob.glob('/sys/class/video4linux/video*')):
 PY
 echo "== last camera log"
 for l in ~/camera.log ~/camera_lane.log; do [ -f $l ] && { echo "  -- $l"; tail -5 $l | sed 's/^/  /'; }; done
-echo "== ROS topics (ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-unset})"
+set +u   # setup.bash reads unset variables
 source /opt/ros/jazzy/setup.bash
+export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-30}   # as the start scripts
+echo "== ROS topics (ROS_DOMAIN_ID=$ROS_DOMAIN_ID)"
 for t in /camera/image_raw/compressed /camera_lane/image_raw/compressed; do
   printf "  %-36s " $t
   timeout 6 ros2 topic hz $t 2>/dev/null | grep -m1 'average rate' || echo "no messages"
