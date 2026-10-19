@@ -26,6 +26,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, CompressedImage
 import yaml
 
@@ -71,7 +72,12 @@ class CsiCamera(Node):
             self.cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
         if not self.cap.isOpened():
             raise RuntimeError(f'cannot open: {pipeline}')
-        self.pub_image = self.create_publisher(CompressedImage, 'image_raw/compressed', 1)
+        # Best effort: a frame lost on the Wi-Fi is dropped, not resent. On a busy
+        # 2.4 GHz link the resends of a reliable stream crowd out /cmd_vel, and a
+        # late frame is worth nothing anyway; the next one is 33 ms behind.
+        self.pub_image = self.create_publisher(
+            CompressedImage, 'image_raw/compressed',
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.pub_info = self.create_publisher(CameraInfo, 'camera_info', 1)
         self.info = self.camera_info(p('camera_info_url').value, w, h, p('fov_deg').value)
         self.get_logger().info(
