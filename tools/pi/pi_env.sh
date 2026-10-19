@@ -8,10 +8,16 @@ export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-30} RMW_IMPLEMENTATION=${RMW_IMPLEMENTATIO
 [ -z "${CYCLONEDDS_URI:-}" ] && [ -f "$HOME/cyclonedds.xml" ] && export CYCLONEDDS_URI=file://$HOME/cyclonedds.xml
 export TURTLEBOT3_MODEL=burger
 # stop_pid NAME...: kill what ~/NAME.pid names (both cameras' scripts open /dev/video0: one at a time).
+# start_all.sh starts each under setsid, so the pid is its process group: kill the whole group, or
+# a node of a killed `ros2 launch` lives on and keeps its device.
 stop_pid() {
-  local n
+  local n p
   for n in "$@"; do
-    [ -f "$HOME/$n.pid" ] && kill $(cat "$HOME/$n.pid") 2>/dev/null
+    [ -f "$HOME/$n.pid" ] || continue
+    p=$(cat "$HOME/$n.pid")
+    kill -- -$p 2>/dev/null || kill $p 2>/dev/null
+    for _ in 1 2 3 4 5; do pgrep -g $p >/dev/null || break; sleep 1; done
+    pkill -KILL -g $p 2>/dev/null
     rm -f "$HOME/$n.pid"
   done
 }
