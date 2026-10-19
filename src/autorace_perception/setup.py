@@ -1,6 +1,7 @@
 from setuptools import find_packages
 from setuptools import setup
-
+import os
+from glob import glob
 package_name = 'autorace_perception'
 
 setup(
@@ -9,7 +10,7 @@ setup(
     packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
-        ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name, ['package.xml']),(os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -25,6 +26,7 @@ setup(
             'detect_sign = autorace_perception.detect_sign:main',
             'detect_stop_line = autorace_perception.detect_stop_line:main',
             'detect_traffic_light = autorace_perception.detect_traffic_light:main',
+
         ],
     },
 )
