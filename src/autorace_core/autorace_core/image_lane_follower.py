@@ -23,6 +23,7 @@ from geometry_msgs.msg import Twist
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import Bool, UInt8
 
@@ -66,7 +67,8 @@ class ImageLaneFollower(Node):
         self.last_seen = -1e9
         self.create_subscription(Bool, '/autorace/run_active',
                                  lambda m: setattr(self, 'run_active', m.data), 1)
-        self.create_subscription(CompressedImage, '/camera_lane/image_raw/compressed', self.on_image, 1)
+        self.create_subscription(CompressedImage, '/camera_lane/image_raw/compressed', self.on_image,
+                                 qos_profile_sensor_data)
         self.pub_cmd = self.create_publisher(Twist, '/cmd_vel/lane', 1)
         self.pub_dbg = self.create_publisher(Image, '/detect/image_lane', 1)
         self.pub_state = self.create_publisher(UInt8, '/detect/lane_state', 1)

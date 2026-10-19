@@ -5,5 +5,5 @@ source /opt/ros/jazzy/setup.bash
 export ROS_DOMAIN_ID=30
 exec python3 $HOME/csi_camera.py --ros-args -r __ns:=/camera_lane \
   -p v4l2_device:=/dev/v4l/by-id/usb-046d_HD_Pro_Webcam_C920-video-index0 \
-  -p width:=432 -p height:=240 -p fps:=30 -p passthrough:=true -p fov_deg:=70.4 \
+  -p width:=432 -p height:=240 -p fps:=${CAMERA_FPS:-30} -p passthrough:=true -p fov_deg:=70.4 \
   -p frame_id:=camera_lane_link

@@ -38,6 +38,7 @@ import numpy as np
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
 
@@ -105,7 +106,11 @@ class CmdVelMux(Node):
         self.create_subscription(Odometry, '/odom', self.callback_odom, 1)
         self.create_subscription(LaserScan, '/scan', self.callback_scan, 1)
 
-        self.pub_cmd_vel = self.create_publisher(Twist, '/cmd_vel', 1)
+        # Crosses the Wi-Fi to the robot: reliable, so a lost command is resent,
+        # and depth 1, so only the newest one is (never a backlog of old ones).
+        self.pub_cmd_vel = self.create_publisher(Twist, '/cmd_vel', QoSProfile(
+            history=HistoryPolicy.KEEP_LAST, depth=1,
+            reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE))
         self.pub_active_input = self.create_publisher(Bool, '/autorace/mux_stalled', 1)
 
         self.last_motion_time = self.get_clock().now().nanoseconds / 1e9

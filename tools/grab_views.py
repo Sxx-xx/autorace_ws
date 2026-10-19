@@ -1,5 +1,6 @@
 """grab_views.py OUTDIR : save one frame each of the camera, the BEV and the lane debug image, and print the lane state/target."""
 import sys, os, time, rclpy, numpy as np, cv2
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, CompressedImage
 from std_msgs.msg import UInt8
 from geometry_msgs.msg import PointStamped
@@ -13,7 +14,7 @@ def img(name):
     return cb
 def jpg(m): got['camera'] = cv2.imdecode(np.frombuffer(m.data, np.uint8), cv2.IMREAD_COLOR)
 cam = sys.argv[2] if len(sys.argv) > 2 else '/camera_lane/image_raw'
-n.create_subscription(CompressedImage, cam + '/compressed', jpg, 1)
+n.create_subscription(CompressedImage, cam + '/compressed', jpg, qos_profile_sensor_data)
 n.create_subscription(Image, '/camera/image_projected', img('bev'), 1)
 n.create_subscription(Image, '/detect/image_lane', img('lane'), 1)
 n.create_subscription(UInt8, '/detect/lane_state', lambda m: got.__setitem__('state', m.data), 1)

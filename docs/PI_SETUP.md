@@ -99,7 +99,7 @@ echo "source ~/turtlebot3_ws/install/setup.bash" >> ~/.bashrc
 ```bash
 sudo cp $(ros2 pkg prefix turtlebot3_bringup)/share/turtlebot3_bringup/script/99-turtlebot3-cdc.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
-sudo usermod -aG dialout,video ubuntu
+sudo usermod -aG dialout,video $USER     # 설치한 사용자 (실제 로봇은 dd)
 ```
 
 `~/.bashrc` 끝에 (ROS_DOMAIN_ID 는 PC 와 같은 값, LDS 는 라이다 라벨대로):
@@ -211,9 +211,9 @@ ros2 run turtlebot3_teleop teleop_keyboard
 Description=AutoRace robot drivers
 After=network-online.target
 [Service]
-User=ubuntu
+User=<사용자>
 Environment=TURTLEBOT3_MODEL=burger LDS_MODEL=LDS-01 ROS_DOMAIN_ID=30
-ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/ubuntu/autorace_real_ws/install/setup.bash && ros2 launch autorace_bringup robot.launch.py forward_device:=/dev/cam_forward lane_device:=/dev/cam_lane'
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/<사용자>/autorace_real_ws/install/setup.bash && ros2 launch autorace_bringup robot.launch.py forward_device:=/dev/cam_forward lane_device:=/dev/cam_lane'
 Restart=on-failure
 RestartSec=3
 [Install]
@@ -232,6 +232,8 @@ journalctl -u autorace-robot -f     # 로그
 | `/dev/ttyACM0` 없음 | OpenCR 전원 스위치, 데이터용 USB 케이블, `dmesg \| tail` |
 | `/dev/ttyUSB0` 없음 | 라이다 USB 어댑터, `LDS_MODEL` |
 | 카메라가 `Device not available` | 장치 번호(`v4l2-ctl --list-devices`), `video` 그룹, 다른 프로세스가 잡고 있는지 `fuser /dev/video0` |
+| 카메라가 안 켜짐 (`no V4L2 device named 'camera0'`, `no frame`) | Pi 에서 `~/check_camera.sh` (`tools/pi/check_camera.sh` 를 복사): 펌웨어 `start_x`, `bcm2835_v4l2`, 장치 이름, `video` 그룹, 장치를 잡은 프로세스, OpenCV 프레임, ROS 토픽 속도를 차례로 본다 |
+| PC 에서 카메라 토픽은 보이는데 영상이 안 옴 | 카메라는 best effort 로 낸다. reliable 로 구독하면 (RViz 의 Image 기본값 등) 연결되지 않는다: Reliability 를 Best Effort 로 |
 | 영상이 15 fps 이하 | USB 허브 대역폭(카메라를 다른 포트로), MJPEG 디코드 부하(`top`), 5 GHz Wi-Fi |
 | chrony 오프셋이 큼 | PC 의 `allow`, Pi 의 `server` IP, `chronyc sources` |
 | Pi 가 느려짐·재부팅 | 전원 부족(5 V 3 A, 굵은 케이블), 발열(`vcgencmd measure_temp`, 80 °C 넘으면 방열판/팬) |
