@@ -3,6 +3,7 @@
 # this PC and the robot's messages, and the laser's noise while standing
 # still (for cmd_vel_mux's scan_change_threshold).
 set -u
+export PYTHONUNBUFFERED=1   # ros2 topic hz into grep: unbuffered, or timeout kills it with the line unsent
 echo "== topics"
 ros2 topic list 2>/dev/null | grep -E "^/(scan|odom|cmd_vel|imu|camera(_lane)?/(image_raw(/compressed)?|camera_info))$" || echo "  (no robot topics: ROS_DOMAIN_ID? same Wi-Fi?)"
 for t in /scan /odom /camera/image_raw/compressed /camera_lane/image_raw/compressed; do

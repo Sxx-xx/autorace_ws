@@ -1,0 +1,94 @@
+AutoRace 실차 전체 미션 실행 순서 (real-review 브랜치, 2026-10-20)
+=====================================================================
+
+전제
+- 노트북과 Pi 가 같은 핫스팟 (Pi: dd@172.20.10.4). 노트북 Wi-Fi 절전은 끈다.
+- 노트북 ~/.bashrc: ROS_DOMAIN_ID=30, RMW_IMPLEMENTATION=rmw_cyclonedds_cpp,
+  CYCLONEDDS_URI=file:///home/songh/cyclonedds.xml (Peer 172.20.10.4)
+- 차선 카메라 C920 을 Pi 의 USB 에 꽂는다 (안 꽂으면 /camera_lane 이 없어 차선 주행이 안 된다).
+- 로봇은 처음에 바퀴가 뜨게 받침 위에 둔다.
+
+--------------------------------------------------------------------
+0. (코드를 바꿨을 때만) 노트북에서 빌드하고 Pi 에 보내기
+--------------------------------------------------------------------
+# [노트북] 처음 한 번: build/ 에 master 빌드가 남아 있으면 지우고 빌드
+cd ~/autorace_ws
+rm -rf build install log
+colcon build --symlink-install
+source install/setup.bash
+
+# [노트북] Pi 로 보내고 Pi 에서 빌드 (Pi 에서 체크아웃된 브랜치에 직접 push 하면 거부된다)
+git push dd@172.20.10.4:autorace_ws real-review:refs/remotes/laptop/real-review
+ssh dd@172.20.10.4 'cd ~/autorace_ws && git merge --ff-only laptop/real-review && source /opt/ros/jazzy/setup.bash && colcon build --symlink-install --packages-select autorace_msgs autorace_bringup autorace_perception autorace_core'
+
+--------------------------------------------------------------------
+1. [노트북 터미널 1] Pi 쪽 전부 켜기: 베이스(OpenCR), 라이다, 카메라
+--------------------------------------------------------------------
+ssh dd@172.20.10.4 '~/start_all.sh'
+#   붐비는 2.4 GHz 면:      ssh dd@172.20.10.4 'CAMERA_FPS=15 ~/start_all.sh'
+#   카메라만 다시 켜기:     ssh dd@172.20.10.4 '~/start_all.sh cameras'
+#   카메라가 안 켜질 때:    ssh dd@172.20.10.4 '~/check_camera.sh'
+#   로그:                   ssh dd@172.20.10.4 'tail -20 ~/robot.log ~/lidar.log ~/cameras.log'
+
+--------------------------------------------------------------------
+2. [노트북 터미널 1] 로봇이 보이는지 확인
+--------------------------------------------------------------------
+cd ~/autorace_ws && source install/setup.bash
+tools/check_robot.sh
+#   기대값: /scan 8~10 Hz, /odom 20~30 Hz, /camera·/camera_lane 의 compressed 30 Hz 근처
+
+--------------------------------------------------------------------
+3. [노트북 터미널 1] 자이로 보정 (Pi 부팅 뒤 한 번, 로봇을 가만히 둔 채)
+--------------------------------------------------------------------
+ros2 service call /reset std_srvs/srv/Trigger "{}"
+
+--------------------------------------------------------------------
+4. [노트북 터미널 2] 비상 정지 창 (Enter 로 정지) - 미션 전에 먼저 띄워 둔다
+--------------------------------------------------------------------
+cd ~/autorace_ws && source install/setup.bash
+python3 tools/estop.py
+
+--------------------------------------------------------------------
+5. [노트북 터미널 3] 미션 전체
+--------------------------------------------------------------------
+cd ~/autorace_ws && source install/setup.bash
+ros2 launch autorace_bringup race.launch.py
+#   신호등 없이 바로 출발:  ros2 launch autorace_bringup race.launch.py auto_start:=true
+#   일부 미션만:            ros2 launch autorace_bringup race.launch.py missions:=construction,parking
+#   차선 주행만:            ros2 launch autorace_bringup race.launch.py missions:=none
+# 신호등 대신 손으로 출발 (다른 터미널에서):
+#   ros2 topic pub --once /autorace/manual_start std_msgs/msg/Bool "{data: true}"
+
+--------------------------------------------------------------------
+6. [노트북 터미널 4] 화면 보기 (선택)
+--------------------------------------------------------------------
+cd ~/autorace_ws && source install/setup.bash
+# 레이스 중에는 decode:=false (레이스가 이미 디코드한 영상을 본다, Wi-Fi 에 부담 없음)
+ros2 launch autorace_bringup view_camera.launch.py decode:=false
+ros2 launch autorace_bringup view_camera.launch.py decode:=false camera_topic:=/camera_lane/image_raw
+# 레이스 없이 카메라만 볼 때
+ros2 launch autorace_bringup view_camera.launch.py
+# 차선 인식 결과 / 라이다·미션 상태
+ros2 run rqt_image_view rqt_image_view /camera/image_projected
+python3 tools/mission_marker.py & rviz2 -d tools/scan_view.rviz
+#   RViz 에서 카메라를 직접 볼 때는 Image 표시의 Reliability 를 Best Effort 로 (카메라는 best effort 로 낸다)
+
+--------------------------------------------------------------------
+7. 끝내기 (이 순서로)
+--------------------------------------------------------------------
+# [터미널 3] race.launch.py 를 Ctrl+C
+# [노트북] 바퀴 정지 명령 (OpenCR 은 마지막 명령을 계속 따른다)
+tools/stop_robot.sh
+# [노트북] Pi 쪽 전부 끄기
+ssh dd@172.20.10.4 '~/stop_all.sh'
+
+--------------------------------------------------------------------
+주의
+--------------------------------------------------------------------
+- level_crossing_test, custom_teleop 은 /cmd_vel 에 직접 낸다. race.launch.py 의 cmd_vel_mux 와
+  같은 토픽이라 레이스와 동시에 띄우지 않는다.
+    ros2 run autorace_core custom_teleop
+    ros2 run autorace_core level_crossing_test
+- Pi 의 ~/start_*.sh 는 ~/autorace_ws/tools/pi/ 를 가리키는 심볼릭 링크다. 스크립트는 저장소에서만 고친다.
+  (예전 사본은 Pi 의 ~/pi_home_backup_2026-10-20/ 에 있다)
+- Pi 에서 직접 고쳤던 내용은 Pi 의 pi-local-2026-10-20 브랜치에 보존했고 real-review 에 합쳤다.
