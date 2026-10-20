@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""lane_view.py : the lane pipeline's pictures, live, in one OpenCV window (not rqt).
+
+  1 camera        the decoded lane camera (<camera>/image_decoded)
+  2 BEV           bev_projector's bird's eye view (/camera/image_projected)
+  3 detector      the lane detector's own picture (/detect/image_lane): the
+                  sliding windows and fitted lines, or detect_lane's map
+  4 yellow mask   HSV thresholds on the BEV, as the detector has them
+  5 white mask    (detect_lane section of perception_<profile>.yaml)
+  6 Sobel x       edges across the BEV (what sliding.sobel_min keeps white near)
+
+Run on the PC with the lane pipeline up (race.launch.py or lane_drive.launch.py):
+  python3 tools/lane_view.py                          # C920: /camera_lane
+  python3 tools/lane_view.py --camera /camera         # the forward camera
+q or Esc closes it.
+"""
+import argparse
+import os
+import time
+
+import cv2
+import numpy as np
+import rclpy
+import yaml
+from ament_index_python.packages import get_package_share_directory
+from cv_bridge import CvBridge
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import Image
+
+TILE = (400, 150)       # width, height of each picture in the window
+
+
+def thresholds(profile):
+    """The detector's HSV bounds from perception_<profile>.yaml (detect_lane's defaults otherwise)."""
+    path = os.path.join(get_package_share_directory('autorace_bringup'), 'param',
+                        f'perception_{profile}.yaml')
+    params = yaml.safe_load(open(path)).get('detect_lane', {}).get('ros__parameters', {})
+    lane = params.get('detect', {}).get('lane', {})
+    defaults = {'white': (0, 179, 0, 70, 105, 255), 'yellow': (10, 127, 70, 255, 95, 255)}
+    bounds = {}
+    for colour, d in defaults.items():
+        c = lane.get(colour, {})
+        get = lambda k, i: c.get(k, d[i])
+        bounds[colour] = (np.array([get('hue_l', 0), get('saturation_l', 2), get('lightness_l', 4)],
+                                   np.uint8),
+                          np.array([get('hue_h', 1), get('saturation_h', 3), get('lightness_h', 5)],
+                                   np.uint8))
+    return bounds
+
+
+def tile(image, label):
+    """Fit a picture into a tile, letterboxed, with its label."""
+    out = np.zeros((TILE[1], TILE[0], 3), np.uint8)
+    if image is not None:
+        if image.ndim == 2:
+            image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        scale = min(TILE[0] / image.shape[1], TILE[1] / image.shape[0])
+        small = cv2.resize(image, (int(image.shape[1] * scale), int(image.shape[0] * scale)))
+        y, x = (TILE[1] - small.shape[0]) // 2, (TILE[0] - small.shape[1]) // 2
+        out[y:y + small.shape[0], x:x + small.shape[1]] = small
+    else:
+        cv2.putText(out, 'waiting...', (140, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (120, 120, 120), 1)
+    cv2.rectangle(out, (0, 0), (TILE[0] - 1, TILE[1] - 1), (80, 80, 80), 1)
+    cv2.putText(out, label, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+    return out
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--camera', default='/camera_lane', help='camera namespace')
+    parser.add_argument('--profile', default='real')
+    args = parser.parse_args()
+    bounds = thresholds(args.profile)
+
+    rclpy.init()
+    node = rclpy.create_node('lane_view')
+    bridge = CvBridge()
+    latest = {}
+    counts = {}
+
+    def keep(name):
+        def callback(msg):
+            latest[name] = bridge.imgmsg_to_cv2(msg, 'bgr8')
+            counts[name] = counts.get(name, 0) + 1
+        return callback
+
+    for name, topic in (('camera', args.camera + '/image_decoded'),
+                        ('bev', '/camera/image_projected'),
+                        ('detector', '/detect/image_lane')):
+        node.create_subscription(Image, topic, keep(name), qos_profile_sensor_data)
+
+    title = 'AutoRace lane preprocessing (q: quit)'
+    cv2.namedWindow(title, cv2.WINDOW_NORMAL)
+    rates, since = {}, time.time()
+    while rclpy.ok():
+        rclpy.spin_once(node, timeout_sec=0.01)
+        if time.time() - since >= 1.0:
+            rates = {k: v / (time.time() - since) for k, v in counts.items()}
+            counts.clear()
+            since = time.time()
+        bev = latest.get('bev')
+        yellow = white = edges = None
+        if bev is not None:
+            hsv = cv2.cvtColor(bev, cv2.COLOR_BGR2HSV)
+            yellow = cv2.inRange(hsv, *bounds['yellow'])
+            white = cv2.inRange(hsv, *bounds['white'])
+            gray = cv2.cvtColor(bev, cv2.COLOR_BGR2GRAY)
+            edges = cv2.convertScaleAbs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
+        rate = lambda k: f' {rates.get(k, 0):.0f} Hz'
+        top = np.hstack([tile(latest.get('camera'), '1 camera ' + args.camera + rate('camera')),
+                         tile(bev, '2 BEV (warpPerspective)' + rate('bev')),
+                         tile(latest.get('detector'), '3 detector /detect/image_lane' + rate('detector'))])
+        bottom = np.hstack([tile(yellow, '4 yellow HSV mask'), tile(white, '5 white HSV mask'),
+                            tile(edges, '6 Sobel x')])
+        cv2.imshow(title, np.vstack([top, bottom]))
+        if cv2.waitKey(1) & 0xFF in (ord('q'), 27):
+            break
+    cv2.destroyAllWindows()
+    node.destroy_node()
+    rclpy.try_shutdown()
+
+
+if __name__ == '__main__':
+    main()

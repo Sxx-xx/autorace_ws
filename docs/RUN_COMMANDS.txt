@@ -21,10 +21,16 @@ source install/setup.bash
 git push dd@172.20.10.4:autorace_ws real-review:refs/remotes/laptop/real-review
 ssh dd@172.20.10.4 'cd ~/autorace_ws && git merge --ff-only laptop/real-review && source /opt/ros/jazzy/setup.bash && colcon build --symlink-install --packages-select autorace_msgs autorace_bringup autorace_perception autorace_core'
 
+# [처음 한 번] 시계 동기 (노트북 시계가 Pi 를 따른다; 핫스팟의 인터넷 NTP 는 지터 ~110 ms 라 못 쓴다)
+#   ssh -t dd@172.20.10.4 'sudo bash ~/autorace_ws/tools/pi/setup_chrony.sh'      # Pi 먼저
+#   sudo bash tools/setup_chrony_pc.sh 172.20.10.4                                 # 그다음 노트북
+#   확인: chronyc sources (노트북, 172.20.10.4 앞에 ^*),  tools/check_robot.sh 의 clock offset
+
 --------------------------------------------------------------------
 1. [노트북 터미널 1] Pi 쪽 전부 켜기: 베이스(OpenCR), 라이다, 카메라
 --------------------------------------------------------------------
 ssh dd@172.20.10.4 '~/start_all.sh'
+#   (robot, watchdog, lidar, cameras. watchdog: PC 의 /cmd_vel 이 0.5 s 끊기면 Pi 가 바퀴를 세운다)
 #   붐비는 2.4 GHz 면:      ssh dd@172.20.10.4 'CAMERA_FPS=15 ~/start_all.sh'
 #   카메라만 다시 켜기:     ssh dd@172.20.10.4 '~/start_all.sh cameras'
 #   카메라가 안 켜질 때:    ssh dd@172.20.10.4 '~/check_camera.sh'
@@ -106,6 +112,10 @@ ros2 launch autorace_bringup view_camera.launch.py decode:=false
 ros2 launch autorace_bringup view_camera.launch.py decode:=false camera_topic:=/camera_lane/image_raw
 # 레이스 없이 카메라만 볼 때
 ros2 launch autorace_bringup view_camera.launch.py
+# 차선 전처리 과정을 한 창에 (imshow: 카메라, BEV, 검출 결과, 노랑/흰색 마스크, Sobel)
+python3 tools/lane_view.py                     # C920 (/camera_lane)
+#   C920 없이 Pi 카메라로 (레이스 대신): Pi 에서 ~/start_all.sh cameras, 노트북에서
+#   ros2 launch tools/lane_demo_picam.launch.py  &  python3 tools/lane_view.py --camera /camera
 # 차선 인식 결과 / 라이다·미션 상태
 ros2 run rqt_image_view rqt_image_view /camera/image_projected
 python3 tools/mission_marker.py & rviz2 -d tools/scan_view.rviz
