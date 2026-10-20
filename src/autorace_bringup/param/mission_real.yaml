@@ -74,11 +74,17 @@ level_crossing_mission:
 
 tunnel_mission:
   ros__parameters:
-    inside: 1.86
+    # 1.74 m inside; the entrance 0.18 m from the right wall and the exit as
+    # far from the far wall, in the left one: 45 degrees ahead to the left.
+    inside: 1.74
     entrance_right: 0.18
-    exit_x: 1.68
+    exit_x: 1.56
     speed: 0.18
     cornering_rate: 1.0
+    # The forward camera going dark starts the mission, light again ends it
+    # (TUNE at the venue: the log prints the brightness on both).
+    dark_ratio: 0.5
+    bright_ratio: 2.0
 
 # ---- forward camera detectors (TUNE under the venue's lights) ----
 # Watch /detect/image_sign, /detect/image_traffic_light,
