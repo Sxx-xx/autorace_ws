@@ -30,6 +30,7 @@ from cv_bridge import CvBridge
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import UInt8
 
@@ -75,7 +76,8 @@ class DetectTrafficLight(Node):
         self.publish_debug = value('publish_debug_image')
 
         self.bridge = CvBridge()
-        self.create_subscription(Image, '/detect/image_input', self.callback_image, 1)
+        self.create_subscription(Image, '/detect/image_input', self.callback_image,
+                                 qos_profile_sensor_data)
         self.pub_light = self.create_publisher(UInt8, '/detect/traffic_light', 1)
         self.pub_image = self.create_publisher(Image, '/detect/image_traffic_light', 1)
 

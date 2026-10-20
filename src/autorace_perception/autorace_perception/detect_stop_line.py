@@ -24,6 +24,7 @@ from cv_bridge import CvBridge
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float64
 
@@ -51,7 +52,8 @@ class DetectStopLine(Node):
         self.min_width_px = self.get_parameter('min_width_m').value * self.ppm
 
         self.bridge = CvBridge()
-        self.create_subscription(Image, '/detect/image_input', self.callback_image, 1)
+        self.create_subscription(Image, '/detect/image_input', self.callback_image,
+                                 qos_profile_sensor_data)
         self.pub_distance = self.create_publisher(Float64, '/detect/stop_line', 1)
 
     def callback_image(self, msg):

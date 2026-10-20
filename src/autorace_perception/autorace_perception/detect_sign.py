@@ -38,6 +38,7 @@ from cv_bridge import CvBridge
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 
 
@@ -94,7 +95,8 @@ class DetectSign(Node):
         self.bridge = CvBridge()
         self.streaks = {}
 
-        self.create_subscription(Image, '/detect/image_input', self.callback_image, 1)
+        self.create_subscription(Image, '/detect/image_input', self.callback_image,
+                                 qos_profile_sensor_data)
         self.pub_sign = self.create_publisher(SignDetection, '/autorace/sign', 5)
         self.pub_image = self.create_publisher(Image, '/detect/image_sign', 1)
 

@@ -29,6 +29,10 @@ ssh dd@172.20.10.4 '~/start_all.sh'
 #   카메라만 다시 켜기:     ssh dd@172.20.10.4 '~/start_all.sh cameras'
 #   카메라가 안 켜질 때:    ssh dd@172.20.10.4 '~/check_camera.sh'
 #   로그:                   ssh dd@172.20.10.4 'tail -20 ~/robot.log ~/lidar.log ~/cameras.log'
+# 한 번에 띄우는 다른 방법 (같은 하드웨어 노드, 부분별 재시작은 안 됨. Ctrl+C 로 전부 꺼진다):
+#   ssh -t dd@172.20.10.4 'source ~/autorace_ws/tools/pi/pi_env.sh && ros2 launch autorace_bringup pi_sensors.launch.py'
+#   부분만: lidar:=false / cameras:=false / base:=false,  fps:=15,  lane:=false
+#   (start_all.sh 와 동시에 띄우지 않는다: 같은 장치를 연다)
 
 --------------------------------------------------------------------
 2. [노트북 터미널 1] 로봇이 보이는지 확인
@@ -53,6 +57,7 @@ python3 tools/estop.py
 --------------------------------------------------------------------
 cd ~/autorace_ws && source install/setup.bash
 ros2 launch autorace_bringup race.launch.py
+#   같은 것: ros2 launch autorace_bringup laptop_compute.launch.py  (인자도 같다)
 #   신호등 없이 바로 출발:  ros2 launch autorace_bringup race.launch.py auto_start:=true
 #   일부 미션만:            ros2 launch autorace_bringup race.launch.py missions:=construction,parking
 #   차선 주행만:            ros2 launch autorace_bringup race.launch.py missions:=none

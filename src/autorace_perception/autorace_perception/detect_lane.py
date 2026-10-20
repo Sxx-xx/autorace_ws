@@ -65,6 +65,7 @@ from nav_msgs.msg import Odometry
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
@@ -344,7 +345,8 @@ class DetectLane(Node):
         self.follow_time = 0.0
         self.mission_state = None
 
-        self.create_subscription(Image, '/detect/image_input', self.callback_image, 1)
+        self.create_subscription(Image, '/detect/image_input', self.callback_image,
+                                 qos_profile_sensor_data)
         self.create_subscription(String, '/detect/lane_follow', self.callback_follow, 1)
         self.create_subscription(Odometry, '/odom', self.callback_odom, 1)
         self.create_subscription(

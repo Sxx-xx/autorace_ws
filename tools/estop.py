@@ -17,6 +17,7 @@ import time
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 KILL_NOW = ['autorace_core/cmd_vel_mux', 'autorace_core/lane_controller',
             'autorace_core/mission_manager', 'autorace_core/.*_mission',
@@ -33,7 +34,9 @@ def pkill(sig, pattern):
 def main():
     rclpy.init()
     node = Node('estop')
-    pub = node.create_publisher(Twist, '/cmd_vel', 10)
+    # Across the Wi-Fi as cmd_vel_mux sends it: reliable, and only the newest command queued.
+    pub = node.create_publisher(Twist, '/cmd_vel', QoSProfile(
+        history=HistoryPolicy.KEEP_LAST, depth=1, reliability=ReliabilityPolicy.RELIABLE))
     threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()
     print('\n  ================ E-STOP ================')
     print('  Press Enter to stop the robot.  Ctrl+C closes this window.\n')

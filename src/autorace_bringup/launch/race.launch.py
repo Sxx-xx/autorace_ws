@@ -16,7 +16,9 @@
 
 """The race: lane following, sign detection, the mission manager and missions.
 
-This runs on the PC. The robot runs robot.launch.py (drivers and cameras).
+This runs on the PC (laptop_compute.launch.py is this file under that name).
+The robot runs pi_sensors.launch.py or tools/pi/start_all.sh: drivers and
+cameras only.
 
 profile:=real (default) reads param/mission_real.yaml and
 perception_real.yaml with wall time; profile:=sim reads the *_sim.yaml files

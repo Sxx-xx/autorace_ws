@@ -14,7 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Brightness compensated camera image for the sign and light detectors.
+"""Brightness compensated camera image for the sign and light detectors (PC only).
+
+Not a camera driver, and not for the Pi: the robot's cameras are
+pi_camera.launch.py (in pi_sensors.launch.py). race.launch.py does not use it.
 
 The lane pipeline works on the bird's eye view and is launched separately; this
 is the forward view that the sign, traffic light and level crossing detectors

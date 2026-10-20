@@ -81,6 +81,12 @@ tunnel_mission:
     exit_x: 1.56
     speed: 0.18
     cornering_rate: 1.0
+    # The body as a circle about the wheel axle: the A* keeps at least this
+    # far from walls and obstacles, and further up to comfort_clearance. 0.13
+    # covers the Burger (138 x 178 mm) turning on the spot; measure again if a
+    # camera mount sticks out further.
+    robot_radius: 0.13
+    comfort_clearance: 0.25
     # The forward camera going dark starts the mission, light again ends it
     # (TUNE at the venue: the log prints the brightness on both).
     dark_ratio: 0.5

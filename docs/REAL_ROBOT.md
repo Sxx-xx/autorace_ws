@@ -9,12 +9,12 @@
 ```
  로봇 (Raspberry Pi)                      PC
  ───────────────────                      ──────────────────────────────
- turtlebot3_bringup robot.launch.py       race.launch.py
+ turtlebot3_node (OpenCR)                 laptop_compute.launch.py (= race.launch.py)
    OpenCR  → /odom, /imu, ← /cmd_vel        republish ×2 (JPEG → raw, PC 에서 디코드)
-   LDS     → /scan                          bev_projector, detect_lane, lane_controller
- usb_cam /camera       (전방: 표지판·신호등·차단바)   detect_sign/traffic_light/stop_line/level_crossing
- usb_cam /camera_lane  (아래: 차선·정지선)            mission_manager + 미션 6개, cmd_vel_mux
- = autorace_bringup robot.launch.py
+   ld_lidar (LDS-02) → /scan                bev_projector, detect_lane, lane_controller
+ csi_camera /camera      (전방: 표지판·신호등·차단바)   detect_sign/traffic_light/stop_line/level_crossing
+ csi_camera /camera_lane (아래: 차선·정지선)          mission_manager + 미션 6개, cmd_vel_mux
+ = autorace_bringup pi_sensors.launch.py (또는 ~/start_all.sh)
 ```
 
 - 카메라는 시뮬과 같이 **2대**다. 토픽·장착 위치·각도를 시뮬 모델과 같게 한다.
@@ -39,8 +39,7 @@
    (`colcon build --packages-select autorace_msgs autorace_bringup`; 런치와 보정 파일만 쓴다).
 3. `~/.bashrc`: `export TURTLEBOT3_MODEL=burger LDS_MODEL=LDS-01 ROS_DOMAIN_ID=<PC 와 같은 값>`
 4. 카메라 장치 번호 확인: `v4l2-ctl --list-devices`. 전방이 `/dev/video0`, 차선이 `/dev/video2`
-   가 아니면 `robot.launch.py forward_device:=... lane_device:=...`. udev 규칙으로 고정하면 편하다.
-   `v4l2-ctl -d /dev/video0 --list-formats-ext` 에 320×240 YUYV 가 없으면 `pixel_format:=mjpeg2rgb`.
+   전방 CSI 는 V4L2 이름 `camera0`, C920 은 `/dev/v4l/by-id/` 경로로 찾는다 (`pi_camera.launch.py`).
 5. **시계 동기**: PC 와 Pi 둘 다 `chrony` 를 켜고 같은 서버(또는 PC 를 서버로)를 본다.
    `detect_lane`·공사·주차 미션이 영상/스캔 stamp 를 `/odom` stamp 와 맞추므로 두 시계가
    0.05 s 이상 어긋나면 안 된다. `tools/check_robot.sh` 가 오프셋을 찍는다.
@@ -70,7 +69,7 @@ BEV 의 축척이 몇 % 틀어져 차선 폭 판정이 흔들린다.
   그 터미널에서만 `ROS_DOMAIN_ID=0`).
 - **`/cmd_vel` 타입**: Jazzy 의 turtlebot3_node 는 기본이 `TwistStamped` 라 우리 `Twist` 발행이
   연결조차 안 된다 (구독자 수 0, 로봇은 가만히). `param/tb3_burger.yaml` 로
-  `enable_stamped_cmd_vel: false` 를 주며, 우리 `robot.launch.py` 가 `tb3_param_dir` 로 넘긴다.
+  `enable_stamped_cmd_vel: false` 를 주며, `pi_sensors.launch.py` 와 `start_robot.sh` 가 이 파일을 쓴다.
   Pi 에 우리 워크스페이스를 올리기 전까지는 `~/start_robot.sh` (같은 설정으로
   `turtlebot3_bringup robot.launch.py tb3_param_dir:=~/tb3_burger_twist.yaml`) 로 띄운다:
   `ssh dd@172.20.10.3 'setsid nohup ~/start_robot.sh > ~/robot.log 2>&1 < /dev/null & disown'`.
@@ -114,7 +113,7 @@ BEV 의 축척이 몇 % 틀어져 차선 폭 판정이 흔들린다.
 
 ```bash
 # Pi
-ros2 launch autorace_bringup robot.launch.py
+ros2 launch autorace_bringup pi_sensors.launch.py     # 또는 ~/start_all.sh
 # PC
 tools/check_robot.sh                       # 토픽 속도, 시계 오프셋, 라이다 노이즈
 ros2 launch autorace_bringup race.launch.py
@@ -148,7 +147,7 @@ ros2 launch autorace_bringup race.launch.py
 6. **전방 검출기** (`race.launch.py auto_start:=true missions:=`로 미션 없이):
    `/detect/image_sign`, `/detect/image_traffic_light`, `/detect/image_level_crossing`.
    `param/mission_real.yaml` 의 HSV 를 현장 조명에서 맞춘다. 카메라 자동 노출을 끄고
-   (`robot.launch.py autoexposure:=false exposure:=<값>`) 고정해야 한 번 맞춘 값이 유지된다.
+   (`v4l2-ctl -d /dev/video0 -c auto_exposure=1 -c exposure_time_absolute=<값>` 등) 고정해야 한 번 맞춘 값이 유지된다.
    OpenCV hue 는 0~179 (빨강 0/179 근처, 노랑 ~25, 녹 ~60, 파랑 ~110).
 7. **미션 하나씩**: `missions:=intersection` 식으로 해당 구간에 로봇을 두고 확인.
    코스 치수(터널 `inside/exit_x`, 주차 `bay_station/bay_depth`, 갈림길 `branch_distance`)는
@@ -172,7 +171,8 @@ ros2 launch autorace_bringup race.launch.py
 
 - `race.launch.py`, `lane_drive.launch.py`: `profile:=real|sim`, `use_sim_time` 기본 false,
   `compressed` 옵션, mux 에 파라미터 파일, `missions:=''` 가 yaml 값을 덮어쓰던 버그 수정.
-- `robot.launch.py`: Pi 쪽 (turtlebot3_bringup + usb_cam ×2).
+- `pi_sensors.launch.py`: Pi 쪽 (turtlebot3_node + ld_lidar + csi_camera ×2). 예전 `robot.launch.py`(usb_cam)는 삭제.
+- `laptop_compute.launch.py`: PC 쪽 (= `race.launch.py`).
 - `param/perception_real.yaml`, `param/mission_real.yaml`: 실차 값. 코드 기본값으로만 있던
   mux·검출기 HSV 파라미터를 yaml 로 꺼냄.
 - `param/camera_forward.yaml`, `param/camera_lane.yaml`: 보정 자리표시자.

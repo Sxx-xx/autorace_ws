@@ -15,8 +15,8 @@ def img(name):
 def jpg(m): got['camera'] = cv2.imdecode(np.frombuffer(m.data, np.uint8), cv2.IMREAD_COLOR)
 cam = sys.argv[2] if len(sys.argv) > 2 else '/camera_lane/image_raw'
 n.create_subscription(CompressedImage, cam + '/compressed', jpg, qos_profile_sensor_data)
-n.create_subscription(Image, '/camera/image_projected', img('bev'), 1)
-n.create_subscription(Image, '/detect/image_lane', img('lane'), 1)
+n.create_subscription(Image, '/camera/image_projected', img('bev'), qos_profile_sensor_data)
+n.create_subscription(Image, '/detect/image_lane', img('lane'), qos_profile_sensor_data)
 n.create_subscription(UInt8, '/detect/lane_state', lambda m: got.__setitem__('state', m.data), 1)
 n.create_subscription(PointStamped, '/detect/lane_target', lambda m: got.__setitem__('target', (m.point.x, m.point.y)), 1)
 t0 = time.time()

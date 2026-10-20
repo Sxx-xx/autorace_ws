@@ -1,5 +1,6 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from geometry_msgs.msg import Twist
 import sys, select, termios, tty
 
@@ -9,7 +10,9 @@ class CustomTeleop(Node):
     def __init__(self):
         super().__init__('custom_teleop')
         # MUX를 거치지 않고 바퀴로 직접(cmd_vel) 명령을 보냅니다.
-        self.publisher_ = self.create_publisher(Twist, '/cmd_vel', 10)
+        # Wi-Fi 를 건너가므로 cmd_vel_mux 와 같이 reliable, depth 1 (오래된 명령이 쌓이지 않게).
+        self.publisher_ = self.create_publisher(Twist, '/cmd_vel', QoSProfile(
+            history=HistoryPolicy.KEEP_LAST, depth=1, reliability=ReliabilityPolicy.RELIABLE))
         self.timer = self.create_timer(0.1, self.timer_callback)
         
         self.speed = 0.15 # 직진/후진 속도 (m/s)

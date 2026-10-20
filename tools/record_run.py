@@ -40,7 +40,7 @@ class Recorder(Node):
         self.frames = 0
         self.rows = []
         self.create_subscription(CompressedImage, '/camera_lane/image_raw/compressed', self.on_camera, qos_profile_sensor_data)
-        self.create_subscription(Image, '/detect/image_lane', self.on_lane, 1)
+        self.create_subscription(Image, '/detect/image_lane', self.on_lane, qos_profile_sensor_data)
         self.create_subscription(UInt8, '/detect/lane_state',
                                  lambda m: self.s.__setitem__('state', STATES.get(m.data, m.data)), 1)
         self.create_subscription(PointStamped, '/detect/lane_target',

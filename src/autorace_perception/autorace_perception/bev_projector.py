@@ -79,7 +79,8 @@ class BevProjector(Node):
         # Straight from the robot, which sends it best effort.
         self.create_subscription(CameraInfo, '/camera/camera_info', self.callback_info,
                                  qos_profile_sensor_data)
-        self.create_subscription(Image, '/camera/image_input', self.callback_image, 1)
+        self.create_subscription(Image, '/camera/image_input', self.callback_image,
+                                 qos_profile_sensor_data)
         self.pub_bev = self.create_publisher(Image, '/camera/image_output', 1)
 
         self.far = self.near + self.out_h / self.ppm

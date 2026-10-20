@@ -191,7 +191,7 @@ echo "source ~/autorace_real_ws/install/setup.bash" >> ~/.bashrc && source ~/.ba
 
 Pi:
 ```bash
-ros2 launch autorace_bringup robot.launch.py forward_device:=/dev/cam_forward lane_device:=/dev/cam_lane
+ros2 launch autorace_bringup pi_sensors.launch.py      # 또는 ~/start_all.sh (부분별로 따로 띄움)
 ```
 PC (같은 ROS_DOMAIN_ID):
 ```bash
@@ -213,7 +213,7 @@ After=network-online.target
 [Service]
 User=<사용자>
 Environment=TURTLEBOT3_MODEL=burger LDS_MODEL=LDS-01 ROS_DOMAIN_ID=30
-ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/<사용자>/autorace_real_ws/install/setup.bash && ros2 launch autorace_bringup robot.launch.py forward_device:=/dev/cam_forward lane_device:=/dev/cam_lane'
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && source /home/<사용자>/autorace_real_ws/install/setup.bash && ros2 launch autorace_bringup pi_sensors.launch.py'
 Restart=on-failure
 RestartSec=3
 [Install]
