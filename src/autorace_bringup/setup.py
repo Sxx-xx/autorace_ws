@@ -24,5 +24,6 @@ setup(
     license='Apache-2.0',
     entry_points={'console_scripts': [
             'csi_camera = autorace_bringup.csi_camera:main',
-            'ld_lidar = autorace_bringup.ld_lidar:main',]},
+            'ld_lidar = autorace_bringup.ld_lidar:main',
+            'cmd_vel_watchdog = autorace_bringup.cmd_vel_watchdog:main',]},
 )

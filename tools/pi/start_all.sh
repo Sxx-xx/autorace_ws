@@ -1,9 +1,9 @@
 #!/bin/bash
-# Everything on the robot, detached: base (OpenCR), lidar, cameras (CSI forward, C920 lane if plugged
-# in). Logs and pids in $HOME. Names restart only those: start_all.sh cameras. stop_all.sh stops.
+# Everything on the robot, detached: base (OpenCR), the cmd_vel watchdog, lidar, cameras (CSI
+# forward, C920 lane if plugged in). Logs and pids in $HOME. Names restart only those: start_all.sh cameras. stop_all.sh stops.
 source "$(dirname "$(readlink -f "$0")")/pi_env.sh"
 cd $HOME
-for n in ${*:-robot lidar cameras}; do
+for n in ${*:-robot watchdog lidar cameras}; do
   case $n in
     camera|camera_lane|cameras) stop_pid camera camera_lane cameras ;;   # one opener of each device
     *) stop_pid $n ;;
@@ -18,4 +18,4 @@ for n in ${*:-robot lidar cameras}; do
   setsid nohup "$PI_DIR/start_$n.sh" > $n.log 2>&1 < /dev/null & echo $! > $n.pid
   sleep 3
 done
-for n in ${*:-robot lidar cameras}; do echo "started $n (pid $(cat $n.pid), log ~/$n.log)"; done
+for n in ${*:-robot watchdog lidar cameras}; do echo "started $n (pid $(cat $n.pid), log ~/$n.log)"; done

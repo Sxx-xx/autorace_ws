@@ -20,6 +20,7 @@
            transforms (turtlebot3_state_publisher)
   lidar    the LDS-02 (ld_lidar, /scan)
   cameras  pi_camera.launch.py: JPEG frames on /camera and /camera_lane, best effort
+  watchdog cmd_vel_watchdog: zero velocity when the PC's /cmd_vel stops coming
 
 No image is decoded or processed here: the PC runs all of that
 (laptop_compute.launch.py) and sends back /cmd_vel. Each part can be left out
@@ -52,6 +53,8 @@ def generate_launch_description():
         DeclareLaunchArgument('base', default_value='true',
                               description='start the OpenCR base and the robot transforms'),
         DeclareLaunchArgument('lidar', default_value='true', description='start ld_lidar'),
+        DeclareLaunchArgument('watchdog', default_value='true',
+                              description='stop the wheels when /cmd_vel stops coming'),
         DeclareLaunchArgument('cameras', default_value='true',
                               description='start pi_camera.launch.py'),
         DeclareLaunchArgument('usb_port', default_value='/dev/ttyACM0'),
@@ -75,6 +78,11 @@ def generate_launch_description():
             condition=base,
             parameters=[os.path.join(pkg_bringup, 'param', 'tb3_burger.yaml'), {'namespace': ''}],
             arguments=['-i', LaunchConfiguration('usb_port')],
+        ),
+        Node(
+            package='autorace_bringup', executable='cmd_vel_watchdog',
+            name='cmd_vel_watchdog', output='screen',
+            condition=IfCondition(LaunchConfiguration('watchdog')),
         ),
         Node(
             package='autorace_bringup', executable='ld_lidar', name='ld_lidar', output='screen',
