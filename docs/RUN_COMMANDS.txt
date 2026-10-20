@@ -60,6 +60,35 @@ ros2 launch autorace_bringup race.launch.py
 #   ros2 topic pub --once /autorace/manual_start std_msgs/msg/Bool "{data: true}"
 
 --------------------------------------------------------------------
+5-1. (선택) 터널만 시험 - 5 대신 [노트북 터미널 3]
+--------------------------------------------------------------------
+# 로봇을 터널 입구 앞 차선 위에 둔다 (입구에서 0.5 m 이상 떨어져, 입구 쪽을 보게).
+# 차선 주행으로 들어가다 입구를 지나 어두워지면 터널 미션이 시작된다.
+cd ~/autorace_ws && source install/setup.bash
+ros2 launch autorace_bringup race.launch.py missions:=tunnel auto_start:=true 2>&1 | grep --line-buffered -E "Tunnel|->|ERROR"
+#   기대 로그 순서:
+#     Tunnel: dark (35 of 190) past the entrance, entering.      <- 어두워져 시작 (밝기 값)
+#     LANE_DRIVE -> TUNNEL
+#     Tunnel: at (x, y), heading .. deg off the tunnel, driving through.
+#     Tunnel: at the exit, squaring up to its right wall.
+#     Tunnel: square to the wall, leaving.
+#     Tunnel: light again (190, from 35).                         <- 밝아져 끝 (밝기 값)
+#     TUNNEL -> LANE_DRIVE
+#   "dark ... but no entrance seen"  : 입구 벽 끝을 라이다가 못 봤다 (입구 가운데로 들어가는지 확인)
+#   "not square to the wall in time" : 출구에서 오른쪽 벽이 안 보였다 (치수 exit_x / inside 확인)
+#   "never got light"                : bright_ratio 가 너무 크다
+
+# [노트북 터미널 4] 밝기 값 확인 (dark_ratio / bright_ratio 조정용, race 가 떠 있는 동안)
+#   터널 밖과 안에서의 값을 보고 mission_real.yaml 의 tunnel_mission 을 고친다:
+#   dark_ratio  < (터널 안 값 / 밖 값),  bright_ratio < (밖 값 / 터널 안 값)
+#   (Ctrl+C 로 끌 때 나오는 traceback 은 무시해도 된다)
+python3 -c "import rclpy,numpy as n;from rclpy.qos import qos_profile_sensor_data as q;from sensor_msgs.msg import Image;rclpy.init();d=rclpy.create_node('brightness');d.create_subscription(Image,'/camera/image_decoded',lambda m:print(round(float(n.frombuffer(m.data,n.uint8)[::97].mean()))),q);rclpy.spin(d)"
+
+# [노트북 터미널 4] 미션 상태 / 터널 활성 여부
+ros2 topic echo /autorace/mission/tunnel/active
+# 같은 터널을 다시 시험할 때: 터널 미션은 한 번만 실행되므로 race.launch.py 를 Ctrl+C 하고 다시 띄운다
+
+--------------------------------------------------------------------
 6. [노트북 터미널 4] 화면 보기 (선택)
 --------------------------------------------------------------------
 cd ~/autorace_ws && source install/setup.bash
