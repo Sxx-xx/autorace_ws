@@ -61,6 +61,10 @@ ros2 launch autorace_bringup race.launch.py
 #   신호등 없이 바로 출발:  ros2 launch autorace_bringup race.launch.py auto_start:=true
 #   일부 미션만:            ros2 launch autorace_bringup race.launch.py missions:=construction,parking
 #   차선 주행만:            ros2 launch autorace_bringup race.launch.py missions:=none
+#   슬라이딩 윈도우 차선 인식 (실험용, 기본은 detect_lane):
+#                           ros2 launch autorace_bringup race.launch.py lane_detector:=sliding_window
+#     결과 화면: ros2 run rqt_image_view rqt_image_view /detect/image_lane  (창, 맞춘 곡선, 목표점)
+#     Sobel 을 같이 쓰려면 perception_real.yaml 의 detect_lane 에  sliding: {sobel_min: 60}
 # 신호등 대신 손으로 출발 (다른 터미널에서):
 #   ros2 topic pub --once /autorace/manual_start std_msgs/msg/Bool "{data: true}"
 

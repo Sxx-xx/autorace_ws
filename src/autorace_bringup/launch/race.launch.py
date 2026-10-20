@@ -73,6 +73,7 @@ def launch_setup(context):
             'compressed': LaunchConfiguration('compressed'),
             'camera_topic': LaunchConfiguration('lane_camera_topic'),
             'camera_info_topic': LaunchConfiguration('lane_camera_info_topic'),
+            'lane_detector': LaunchConfiguration('lane_detector'),
         }.items()
     ))
 
@@ -136,5 +137,7 @@ def generate_launch_description():
         DeclareLaunchArgument('lane_camera_info_topic', default_value='/camera_lane/camera_info'),
         # true: subscribe to the cameras' /compressed streams and decode here.
         DeclareLaunchArgument('compressed', default_value='true'),
+        # detect_lane, or sliding_window (lane_drive.launch.py).
+        DeclareLaunchArgument('lane_detector', default_value='detect_lane'),
     ]
     return LaunchDescription(declare_args + [OpaqueFunction(function=launch_setup)])

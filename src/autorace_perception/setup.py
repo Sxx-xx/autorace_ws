@@ -22,6 +22,7 @@ setup(
         'console_scripts': [
             'bev_projector = autorace_perception.bev_projector:main',
             'detect_lane = autorace_perception.detect_lane:main',
+            'detect_lane_sw = autorace_perception.detect_lane_sw:main',
             'detect_level_crossing = autorace_perception.detect_level_crossing:main',
             'detect_sign = autorace_perception.detect_sign:main',
             'detect_stop_line = autorace_perception.detect_stop_line:main',

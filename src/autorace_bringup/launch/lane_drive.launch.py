@@ -47,6 +47,8 @@ def launch_setup(context):
     compressed = LaunchConfiguration('compressed').perform(context).lower() == 'true'
     camera_topic = LaunchConfiguration('camera_topic').perform(context)
     camera_info_topic = LaunchConfiguration('camera_info_topic').perform(context)
+    detector = {'detect_lane': 'detect_lane', 'sliding_window': 'detect_lane_sw'}[
+        LaunchConfiguration('lane_detector').perform(context)]
 
     nodes = []
     if compressed:
@@ -68,8 +70,8 @@ def launch_setup(context):
 
     nodes.append(Node(
         package='autorace_perception',
-        executable='detect_lane',
-        name='detect_lane',
+        executable=detector,
+        name='detect_lane',          # either way: its parameters, its topics
         output='screen',
         parameters=[params, sim_time],
         remappings=[
@@ -106,5 +108,8 @@ def generate_launch_description():
         DeclareLaunchArgument('camera_info_topic', default_value='/camera_lane/camera_info'),
         # true: subscribe to <camera_topic>/compressed and decode on this machine.
         DeclareLaunchArgument('compressed', default_value='true'),
+        # detect_lane (lines remembered along the odometry), or sliding_window
+        # (detect_lane_sw: histogram, windows, a parabola per line).
+        DeclareLaunchArgument('lane_detector', default_value='detect_lane'),
     ]
     return LaunchDescription(declare_args + [OpaqueFunction(function=launch_setup)])
