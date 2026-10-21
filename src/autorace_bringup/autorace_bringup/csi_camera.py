@@ -21,8 +21,10 @@ does no image work at all), and 'pipeline' to replace the GStreamer pipeline.
 Fast capture (2026-10-22). On the IMX219 (legacy stack) the GPU already
 encodes MJPEG, so 'passthrough' works for the CSI camera too: the Pi then
 neither decodes nor re-encodes (90 fps at 2 % of a core, against 23 % for
-decoding alone), and 'jpeg_quality' becomes the encoder's
-compression_quality control. Ask for a 16:9 size for 90 fps (384x216): the
+decoding alone). Its MJPEG is rate controlled, not quality controlled
+(compression_quality has no effect on it; the JPEG format would honour it but
+gives 6.7 fps through OpenCV): 'bitrate' (bits/s, 0 leaves the driver's 10 M,
+13 KB a frame at 90 fps) sets video_bitrate; 2 M is visibly blocky. Ask for a 16:9 size for 90 fps (384x216): the
 firmware picks the sensor mode from size and rate, and 4:3 at 90 fps is a
 cropped, 2x zoomed mode. 'exposure_us' > 0 fixes the exposure (at most
 1e6 / fps), 'controls' sets any other V4L2 control ("name=value,..."; run
@@ -76,6 +78,7 @@ class CsiCamera(Node):
         self.declare_parameter('passthrough', False)
         self.declare_parameter('fov_deg', 62.0)
         self.declare_parameter('exposure_us', 0)       # 0: automatic
+        self.declare_parameter('bitrate', 0)           # passthrough MJPEG, bits/s; 0: driver's
         self.declare_parameter('controls', '')         # 'name=value,...' for v4l2-ctl
         self.declare_parameter('stamp', 'publish')     # or 'capture'
         self.declare_parameter('stats', False)
@@ -84,6 +87,7 @@ class CsiCamera(Node):
         self.frame_id = p('frame_id').value
         self.passthrough = p('passthrough').value
         self.exposure_us = p('exposure_us').value
+        self.bitrate = p('bitrate').value
         self.controls = p('controls').value
         self.capture_stamp = p('stamp').value == 'capture'
         self.stats = p('stats').value
@@ -132,9 +136,8 @@ class CsiCamera(Node):
     def set_controls(self):
         """Exposure, the encoder's quality and any other controls, through v4l2-ctl."""
         controls = [c for c in self.controls.split(',') if c.strip()]
-        if (self.passthrough and self.source.startswith('/dev/')
-                and self.has_control('compression_quality')):
-            controls.insert(0, f'compression_quality={self.quality}')
+        if self.passthrough and self.bitrate > 0 and self.has_control('video_bitrate'):
+            controls.insert(0, f'video_bitrate={self.bitrate}')
         if self.exposure_us > 0:
             # bcm2835-v4l2 and UVC: auto_exposure 1 is manual, exposure_time_absolute in 100 us.
             controls += ['auto_exposure=1',

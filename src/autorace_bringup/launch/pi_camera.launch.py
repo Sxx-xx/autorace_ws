@@ -27,7 +27,7 @@ crowded 2.4 GHz band (the detectors were tuned at 30).
 
 The CSI camera fast (csi_camera's docstring): 90 fps needs a 16:9 size and
 the GPU's own JPEG,
-  forward_width:=384 forward_height:=216 forward_fps:=90 passthrough:=true quality:=60
+  forward_width:=384 forward_height:=216 forward_fps:=90 passthrough:=true bitrate:=6000000
 with exposure_us:=8000 to fix the exposure (<= 1e6 / fps), stamp:=capture for
 the time each frame was taken, stats:=true for a line a second. The defaults
 are the camera as before (320x240 at fps, re-encoded at quality 80).
@@ -64,6 +64,7 @@ def cameras(context):
                          'passthrough': ParameterValue(LaunchConfiguration('passthrough'),
                                                        value_type=bool),
                          'jpeg_quality': integer('quality'),
+                         'bitrate': integer('bitrate'),
                          'exposure_us': integer('exposure_us'),
                          'controls': LaunchConfiguration('controls'),
                          **common}]))
@@ -93,7 +94,10 @@ def generate_launch_description():
         DeclareLaunchArgument('forward_fps', default_value=''),
         DeclareLaunchArgument('passthrough', default_value='false',
                               description="send the GPU's MJPEG as it is"),
-        DeclareLaunchArgument('quality', default_value='80', description='JPEG quality'),
+        DeclareLaunchArgument('quality', default_value='80',
+                              description='JPEG quality when the Pi encodes (not passthrough)'),
+        DeclareLaunchArgument('bitrate', default_value='0',
+                              description="passthrough MJPEG bits/s (0: the driver's 10 M)"),
         DeclareLaunchArgument('exposure_us', default_value='0', description='0: automatic'),
         DeclareLaunchArgument('controls', default_value='',
                               description="other V4L2 controls, 'name=value,...'"),
