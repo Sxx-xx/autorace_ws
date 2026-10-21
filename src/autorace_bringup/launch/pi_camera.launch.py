@@ -59,8 +59,8 @@ def cameras(context):
             namespace='camera', output='screen',
             parameters=[{'v4l2_name': 'camera0', 'frame_id': 'camera_link',
                          'width': integer('forward_width'), 'height': integer('forward_height'),
-                         'fps': ParameterValue(LaunchConfiguration('forward_fps').perform(context)
-                                               or LaunchConfiguration('fps'), value_type=int),
+                         'fps': integer('forward_fps' if LaunchConfiguration('forward_fps')
+                                        .perform(context) else 'fps'),
                          'passthrough': ParameterValue(LaunchConfiguration('passthrough'),
                                                        value_type=bool),
                          'jpeg_quality': integer('quality'),
