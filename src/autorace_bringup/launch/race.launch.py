@@ -74,6 +74,8 @@ def launch_setup(context):
             'camera_topic': LaunchConfiguration('lane_camera_topic'),
             'camera_info_topic': LaunchConfiguration('lane_camera_info_topic'),
             'lane_detector': LaunchConfiguration('lane_detector'),
+            'lane_pipeline': LaunchConfiguration('lane_pipeline'),
+            'lane_stats': LaunchConfiguration('lane_stats'),
         }.items()
     ))
 
@@ -139,5 +141,8 @@ def generate_launch_description():
         DeclareLaunchArgument('compressed', default_value='true'),
         # detect_lane, or sliding_window (lane_drive.launch.py).
         DeclareLaunchArgument('lane_detector', default_value='detect_lane'),
+        # integrated (lane_pipeline, one process) or nodes (as before); lane_stats:=true logs it.
+        DeclareLaunchArgument('lane_pipeline', default_value='integrated'),
+        DeclareLaunchArgument('lane_stats', default_value='false'),
     ]
     return LaunchDescription(declare_args + [OpaqueFunction(function=launch_setup)])

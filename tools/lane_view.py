@@ -80,11 +80,13 @@ def main():
     bridge = CvBridge()
     latest = {}
     counts = {}
+    fresh = [False]         # a new picture since the window was last drawn
 
     def keep(name):
         def callback(msg):
             latest[name] = bridge.imgmsg_to_cv2(msg, 'bgr8')
             counts[name] = counts.get(name, 0) + 1
+            fresh[0] = True
         return callback
 
     for name, topic in (('camera', args.camera + '/image_decoded'),
@@ -93,15 +95,25 @@ def main():
         node.create_subscription(Image, topic, keep(name), qos_profile_sensor_data)
 
     title = 'AutoRace lane preprocessing (q: quit)'
+    reason = 'ROS shut down (SIGINT or SIGTERM)'
     if not args.save:
         cv2.namedWindow(title, cv2.WINDOW_NORMAL)
     rates, since, began = {}, time.time(), time.time()
     while rclpy.ok():
+        # Take everything waiting (three streams at up to 90 Hz), then draw once.
         rclpy.spin_once(node, timeout_sec=0.01)
+        for _ in range(20):
+            rclpy.spin_once(node, timeout_sec=0.0)
         if time.time() - since >= 1.0:
             rates = {k: v / (time.time() - since) for k, v in counts.items()}
             counts.clear()
             since = time.time()
+        if not fresh[0] and not args.save:
+            if cv2.waitKey(1) & 0xFF in (ord('q'), 27):
+                reason = 'q or Esc'
+                break
+            continue
+        fresh[0] = False
         bev = latest.get('bev')
         yellow = white = edges = None
         if bev is not None:
@@ -121,9 +133,16 @@ def main():
                 cv2.imwrite(args.save, np.vstack([top, bottom]))
                 break
             continue
+        # A window closed with its X comes back: only q or Esc end the viewer.
         cv2.imshow(title, np.vstack([top, bottom]))
         if cv2.waitKey(1) & 0xFF in (ord('q'), 27):
+            reason = 'q or Esc'
             break
+    else:
+        reason = 'ROS shut down (SIGINT or SIGTERM)'
+    if args.save:
+        reason = f'saved {args.save}'
+    print(f'lane_view closed: {reason}', flush=True)
     cv2.destroyAllWindows()
     node.destroy_node()
     rclpy.try_shutdown()

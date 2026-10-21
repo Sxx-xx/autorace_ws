@@ -47,38 +47,60 @@ def launch_setup(context):
     compressed = LaunchConfiguration('compressed').perform(context).lower() == 'true'
     camera_topic = LaunchConfiguration('camera_topic').perform(context)
     camera_info_topic = LaunchConfiguration('camera_info_topic').perform(context)
-    detector = {'detect_lane': 'detect_lane', 'sliding_window': 'detect_lane_sw'}[
-        LaunchConfiguration('lane_detector').perform(context)]
+    lane_detector = LaunchConfiguration('lane_detector').perform(context)
+    detector = {'detect_lane': 'detect_lane', 'sliding_window': 'detect_lane_sw'}[lane_detector]
+    pipeline = LaunchConfiguration('lane_pipeline').perform(context)
+    integrated = compressed and pipeline == 'integrated'
 
     nodes = []
-    if compressed:
+    if integrated:
+        # JPEG -> BEV -> lane in one process (lane_pipeline): the nodes 'bev_projector' and
+        # 'detect_lane' with their parameters and topics, no raw picture between processes.
+        nodes.append(Node(
+            package='autorace_perception',
+            executable='lane_pipeline',
+            output='screen',
+            arguments=['--detector', lane_detector],
+            parameters=[params, sim_time,
+                        {'stats': LaunchConfiguration('lane_stats'), 'debug_rate': 10.0}],
+            remappings=[
+                ('/camera/image_compressed', camera_topic + '/compressed'),
+                ('/camera/camera_info', camera_info_topic),
+                ('/camera/image_output', '/camera/image_projected'),
+                ('/camera/image_decoded', decoded_topic(camera_topic)),
+                ('/camera/image_input', '/lane_pipeline/unused_raw'),
+                ('/detect/image_input', '/lane_pipeline/unused_bev'),
+                ('/detect/image_output', '/detect/image_lane'),
+            ],
+        ))
+    elif compressed:
         nodes.append(republish(camera_topic, use_sim_time, 'republish_lane'))
         camera_topic = decoded_topic(camera_topic)
 
-    nodes.append(Node(
-        package='autorace_perception',
-        executable='bev_projector',
-        name='bev_projector',
-        output='screen',
-        parameters=[params, sim_time],
-        remappings=[
-            ('/camera/image_input', camera_topic),
-            ('/camera/camera_info', camera_info_topic),
-            ('/camera/image_output', '/camera/image_projected'),
-        ],
-    ))
-
-    nodes.append(Node(
-        package='autorace_perception',
-        executable=detector,
-        name='detect_lane',          # either way: its parameters, its topics
-        output='screen',
-        parameters=[params, sim_time],
-        remappings=[
-            ('/detect/image_input', '/camera/image_projected'),
-            ('/detect/image_output', '/detect/image_lane'),
-        ],
-    ))
+    if not integrated:
+        nodes.append(Node(
+            package='autorace_perception',
+            executable='bev_projector',
+            name='bev_projector',
+            output='screen',
+            parameters=[params, sim_time],
+            remappings=[
+                ('/camera/image_input', camera_topic),
+                ('/camera/camera_info', camera_info_topic),
+                ('/camera/image_output', '/camera/image_projected'),
+            ],
+        ))
+        nodes.append(Node(
+            package='autorace_perception',
+            executable=detector,
+            name='detect_lane',          # either way: its parameters, its topics
+            output='screen',
+            parameters=[params, sim_time],
+            remappings=[
+                ('/detect/image_input', '/camera/image_projected'),
+                ('/detect/image_output', '/detect/image_lane'),
+            ],
+        ))
 
     nodes.append(Node(
         package='autorace_core',
@@ -111,5 +133,10 @@ def generate_launch_description():
         # detect_lane (lines remembered along the odometry), or sliding_window
         # (detect_lane_sw: histogram, windows, a parabola per line).
         DeclareLaunchArgument('lane_detector', default_value='detect_lane'),
+        # integrated: lane_pipeline, decode + BEV + detection in one process (with compressed);
+        # nodes: republish, bev_projector and the detector as separate nodes, as before.
+        DeclareLaunchArgument('lane_pipeline', default_value='integrated'),
+        DeclareLaunchArgument('lane_stats', default_value='false',
+                              description="lane_pipeline's rate and timing, once a second"),
     ]
     return LaunchDescription(declare_args + [OpaqueFunction(function=launch_setup)])

@@ -90,6 +90,8 @@ class DetectLaneSlidingWindow(Node):
         self.declare_parameter('hold_last_center_sec', 0.4)
         self.declare_parameter('follow_timeout', 0.5)
         self.declare_parameter('publish_debug_image', True)
+        # The debug picture at most this often (Hz; 0: every picture), and only when watched.
+        self.declare_parameter('debug_rate', 0.0)
         # This node's own.
         self.declare_parameter('sliding.windows', 10)
         self.declare_parameter('sliding.margin_m', 0.05)        # half a window's width
@@ -118,6 +120,8 @@ class DetectLaneSlidingWindow(Node):
         self.hold_last_center = value('hold_last_center_sec')
         self.follow_timeout = value('follow_timeout')
         self.publish_debug = value('publish_debug_image')
+        self.debug_rate = self.get_parameter('debug_rate').value
+        self.debug_time = 0.0
         self.windows = value('sliding.windows')
         self.margin = int(value('sliding.margin_m') * self.ppm)
         self.recentre_pixels = value('sliding.recentre_pixels')
@@ -238,7 +242,10 @@ class DetectLaneSlidingWindow(Node):
         self.counter += 1
         if self.counter % self.process_every_n != 0:
             return
-        image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        self.process(self.bridge.imgmsg_to_cv2(msg, 'bgr8'), msg.header)
+
+    def process(self, image, header):
+        """One bird's eye view (BGR) and its header (also called directly by lane_pipeline)."""
         masks = self.binarise(image)
         boxes = []
         lines = {colour: self.find_line(masks[colour], boxes) for colour in masks}
@@ -247,7 +254,7 @@ class DetectLaneSlidingWindow(Node):
             points = line[1][::6] if line is not None else np.zeros((0, 2))
             cloud = np.zeros((len(points), 3), np.float32)
             cloud[:, :2] = points
-            header = Header(stamp=msg.header.stamp, frame_id='base_footprint')
+            header = Header(stamp=header.stamp, frame_id='base_footprint')
             self.pub_lines[colour].publish(point_cloud2.create_cloud_xyz32(header, cloud))
 
         target, state = self.find_target(lines)
@@ -264,13 +271,23 @@ class DetectLaneSlidingWindow(Node):
         self.pub_state.publish(UInt8(data=state))
         if target is not None:
             point = PointStamped()
-            point.header.stamp = msg.header.stamp
+            point.header.stamp = header.stamp
             point.header.frame_id = 'base_footprint'
             point.point.x, point.point.y = target
             self.pub_target.publish(point)
             self.pub_offset.publish(Float64(data=-target[1]))
-        if self.publish_debug:
-            self.publish_debug_image(image.shape, masks, boxes, lines, target, state, msg.header)
+        if self.publish_debug and self.debug_due():
+            self.publish_debug_image(image.shape, masks, boxes, lines, target, state, header)
+
+    def debug_due(self):
+        """Whether to draw the debug picture now: someone watching, at most debug_rate Hz."""
+        if self.pub_image.get_subscription_count() == 0:
+            return False
+        now = self.now()
+        if self.debug_rate > 0 and now - self.debug_time < 1.0 / self.debug_rate:
+            return False
+        self.debug_time = now
+        return True
 
     def publish_debug_image(self, shape, masks, boxes, lines, target, state, header):
         """The binarised view with the windows, the fitted lines and the target."""

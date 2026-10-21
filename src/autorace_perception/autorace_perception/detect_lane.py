@@ -258,6 +258,8 @@ class DetectLane(Node):
         # A request to follow one line only lapses when it stops being repeated.
         self.declare_parameter('follow_timeout', 0.5)
         self.declare_parameter('publish_debug_image', True)
+        # The debug picture at most this often (Hz; 0: every picture), and only when watched.
+        self.declare_parameter('debug_rate', 0.0)
 
         self.ppm = self.get_parameter('bev.pixels_per_meter').value
         self.near = self.get_parameter('bev.near').value
@@ -315,6 +317,8 @@ class DetectLane(Node):
         self.hold_last_center = self.get_parameter('hold_last_center_sec').value
         self.follow_timeout = self.get_parameter('follow_timeout').value
         self.publish_debug = self.get_parameter('publish_debug_image').value
+        self.debug_rate = self.get_parameter('debug_rate').value
+        self.debug_time = 0.0
 
         self.white = self.hsv_bounds('white')
         self.yellow = self.hsv_bounds('yellow')
@@ -461,7 +465,16 @@ class DetectLane(Node):
         longest = np.hypot(stats[:, cv2.CC_STAT_WIDTH], stats[:, cv2.CC_STAT_HEIGHT])
         keep = longest >= self.min_line_px
         keep[0] = False
-        return np.where(keep[labels], 255, 0).astype(np.uint8)
+        dropped = np.flatnonzero(~keep[1:]) + 1
+        if len(dropped) > 64:
+            return np.where(keep[labels], 255, 0).astype(np.uint8)
+        # The same, faster: clear each short piece inside its own box (the mask is 0/255).
+        out = mask.copy()
+        for i in dropped:
+            x, y, w, h = stats[i, :4]
+            box = out[y:y + h, x:x + w]
+            box[labels[y:y + h, x:x + w] == i] = 0
+        return out
 
     def thin_bright(self, hsv):
         """Pixels brighter than their surroundings in a strip thinner than a line.
@@ -476,7 +489,8 @@ class DetectLane(Node):
         # Outside the camera's view the bird's eye image is pure black, which
         # would make the floor next to it look like a bright strip. Count it,
         # and the few interpolated pixels along its edge, as bright instead.
-        outside = cv2.dilate((hsv.max(axis=2) == 0).astype(np.uint8), self.edge_kernel)
+        black = cv2.inRange(hsv, (0, 0, 0), (0, 0, 0))       # all three channels 0
+        outside = cv2.dilate((black > 0).astype(np.uint8), self.edge_kernel)
         value = hsv[..., 2].copy()
         value[outside > 0] = 255
         tophat = cv2.morphologyEx(value, cv2.MORPH_TOPHAT, self.contrast_kernel)
@@ -681,8 +695,14 @@ class DetectLane(Node):
         self.counter += 1
         if self.counter % self.process_every_n != 0:
             return
+        self.process(self.bridge.imgmsg_to_cv2(msg, 'bgr8'), msg.header)
 
-        image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+    def process(self, image, header):
+        """One bird's eye view (BGR) and its header: the lines, the target, the outputs.
+
+        Called for each image on /detect/image_input, or directly by lane_pipeline, which
+        makes the view in the same process.
+        """
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         if self.map_shape is None:
             self.build_map(image.shape[:2])
@@ -705,7 +725,7 @@ class DetectLane(Node):
         if now - self.follow_time > self.follow_timeout:
             self.follow = None
 
-        self.locate(msg.header.stamp)
+        self.locate(header.stamp)
         # A scatter of stray pixels is not a line.
         none = np.zeros((0, 2))
         yellow_points = self.line_points(yellow_mask) if yellow_pixels > self.min_pixels else none
@@ -713,7 +733,7 @@ class DetectLane(Node):
         yellow_map = self.draw(yellow_points) | self.remembered(2)
         white_map = self.draw(white_points) | self.remembered(3)
         self.remember(yellow_points, white_points)
-        self.publish_lines(yellow_points, white_points, msg.header.stamp)
+        self.publish_lines(yellow_points, white_points, header.stamp)
 
         index, state = self.find_target(yellow_map, white_map)
         if index is not None:
@@ -779,14 +799,24 @@ class DetectLane(Node):
             self.pub_lane.publish(Float64(data=image.shape[1] / 2.0 - left * self.ppm))
             self.pub_offset.publish(Float64(data=-left))
             point = PointStamped()
-            point.header.stamp = msg.header.stamp
+            point.header.stamp = header.stamp
             point.header.frame_id = 'base_footprint'
             point.point.x = ahead
             point.point.y = left
             self.pub_target.publish(point)
 
-        if self.publish_debug:
-            self.publish_debug_image(yellow_map, white_map, target, state, msg.header)
+        if self.publish_debug and self.debug_due():
+            self.publish_debug_image(yellow_map, white_map, target, state, header)
+
+    def debug_due(self):
+        """Whether to draw the debug picture now: someone watching, at most debug_rate Hz."""
+        if self.pub_image.get_subscription_count() == 0:
+            return False
+        now = self.now()
+        if self.debug_rate > 0 and now - self.debug_time < 1.0 / self.debug_rate:
+            return False
+        self.debug_time = now
+        return True
 
     def publish_lines(self, yellow_points, white_points, stamp):
         """Publish this picture's lines as points (x ahead, y left of the axle)."""

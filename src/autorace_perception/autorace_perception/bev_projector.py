@@ -126,9 +126,26 @@ class BevProjector(Node):
             [0, self.out_h - 1],
         ], dtype=np.float32)
         self.homography = cv2.getPerspectiveTransform(source, destination)
+        # Where each output pixel comes from, worked out once: remap then only looks it up
+        # (warpPerspective does the projective division for every pixel of every picture).
+        xs, ys = np.meshgrid(np.arange(self.out_w, dtype=np.float32),
+                             np.arange(self.out_h, dtype=np.float32))
+        target = np.stack([xs, ys], axis=-1).reshape(-1, 1, 2)
+        src = cv2.perspectiveTransform(target, np.linalg.inv(self.homography))
+        src = src.reshape(self.out_h, self.out_w, 2)
+        self.maps = cv2.convertMaps(src[..., 0], src[..., 1], cv2.CV_16SC2)
         self.get_logger().info(
             'Source quad (u,v): ' + ', '.join(f'({u:.0f},{v:.0f})' for u, v in source)
         )
+
+    def project_image(self, image):
+        """The bird's eye view of a camera picture (BGR), once the intrinsics are known."""
+        if self.homography is None:
+            self.build_homography()
+        if self.blur > 1:
+            image = cv2.GaussianBlur(image, (self.blur, self.blur), 0)
+        return cv2.remap(image, *self.maps, cv2.INTER_LINEAR,
+                         borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
 
     def callback_image(self, msg):
         if not self.fx:
@@ -137,15 +154,7 @@ class BevProjector(Node):
         if self.homography is None:
             self.build_homography()
 
-        image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
-        if self.blur > 1:
-            image = cv2.GaussianBlur(image, (self.blur, self.blur), 0)
-
-        bev = cv2.warpPerspective(
-            image, self.homography, (self.out_w, self.out_h),
-            flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0)
-        )
-
+        bev = self.project_image(self.bridge.imgmsg_to_cv2(msg, 'bgr8'))
         out = self.bridge.cv2_to_imgmsg(bev, 'bgr8')
         out.header = msg.header
         self.pub_bev.publish(out)
