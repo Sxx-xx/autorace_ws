@@ -18,6 +18,20 @@ move when a webcam is plugged in), 'passthrough' to send the camera's own
 MJPEG frames untouched (a UVC webcam compresses in hardware, so the Pi then
 does no image work at all), and 'pipeline' to replace the GStreamer pipeline.
 
+Fast capture (2026-10-22). On the IMX219 (legacy stack) the GPU already
+encodes MJPEG, so 'passthrough' works for the CSI camera too: the Pi then
+neither decodes nor re-encodes (90 fps at 2 % of a core, against 23 % for
+decoding alone), and 'jpeg_quality' becomes the encoder's
+compression_quality control. Ask for a 16:9 size for 90 fps (384x216): the
+firmware picks the sensor mode from size and rate, and 4:3 at 90 fps is a
+cropped, 2x zoomed mode. 'exposure_us' > 0 fixes the exposure (at most
+1e6 / fps), 'controls' sets any other V4L2 control ("name=value,..."; run
+`v4l2-ctl -d <dev> -L` for the list; a USB camera has its own names).
+'stamp': 'capture' stamps each frame with the time the driver took it
+(V4L2 buffer time, monotonic, moved onto the ROS clock), 'publish' (default,
+as before) with the time it was read. 'stats' logs once a second: frames,
+size, Mbps, and capture-to-publish delay.
+
 Both topics go out best effort, depth 1: a lost JPEG over the Wi-Fi is not
 worth resending, the next one is 33 ms behind. Subscribers must be best effort
 too (a reliable reader does not match a best effort writer); launch_helpers'
@@ -26,11 +40,13 @@ closed and opened again instead of warning forever.
 """
 import glob
 import os
+import subprocess
 import time
 
 import cv2
 import numpy as np
 import rclpy
+from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, CompressedImage
@@ -59,10 +75,18 @@ class CsiCamera(Node):
         self.declare_parameter('v4l2_name', '')
         self.declare_parameter('passthrough', False)
         self.declare_parameter('fov_deg', 62.0)
+        self.declare_parameter('exposure_us', 0)       # 0: automatic
+        self.declare_parameter('controls', '')         # 'name=value,...' for v4l2-ctl
+        self.declare_parameter('stamp', 'publish')     # or 'capture'
+        self.declare_parameter('stats', False)
         p = self.get_parameter
         self.quality = p('jpeg_quality').value
         self.frame_id = p('frame_id').value
         self.passthrough = p('passthrough').value
+        self.exposure_us = p('exposure_us').value
+        self.controls = p('controls').value
+        self.capture_stamp = p('stamp').value == 'capture'
+        self.stats = p('stats').value
         self.size = (p('width').value, p('height').value, p('fps').value)
         device = p('v4l2_device').value or self.device_named(p('v4l2_name').value)
         if device:
@@ -86,6 +110,8 @@ class CsiCamera(Node):
         self.count = 0
         self.failures = 0
         self.started = time.time()
+        self.window = []            # (bytes, capture to publish s) over the current second
+        self.window_start = time.time()
 
     def open(self):
         w, h, fps = self.size
@@ -99,8 +125,33 @@ class CsiCamera(Node):
         self.cap.set(cv2.CAP_PROP_FPS, fps)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if self.passthrough:
-            # Hand over the MJPEG buffer as it comes off the USB bus.
+            # Hand over the MJPEG buffer as it comes off the USB bus (or the GPU's encoder).
             self.cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+        self.set_controls()
+
+    def set_controls(self):
+        """Exposure, the encoder's quality and any other controls, through v4l2-ctl."""
+        controls = [c for c in self.controls.split(',') if c.strip()]
+        if (self.passthrough and self.source.startswith('/dev/')
+                and self.has_control('compression_quality')):
+            controls.insert(0, f'compression_quality={self.quality}')
+        if self.exposure_us > 0:
+            # bcm2835-v4l2 and UVC: auto_exposure 1 is manual, exposure_time_absolute in 100 us.
+            controls += ['auto_exposure=1',
+                         f'exposure_time_absolute={max(1, round(self.exposure_us / 100))}']
+        if not controls:
+            return
+        result = subprocess.run(['v4l2-ctl', '-d', self.source, '-c', ','.join(controls)],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            self.get_logger().warn(f'v4l2-ctl -c {",".join(controls)}: {result.stderr.strip()}')
+        else:
+            self.get_logger().info(f'controls: {",".join(controls)}')
+
+    def has_control(self, name):
+        listed = subprocess.run(['v4l2-ctl', '-d', self.source, '-l'],
+                                capture_output=True, text=True)
+        return f' {name} ' in listed.stdout
 
     @staticmethod
     def device_named(name):
@@ -154,7 +205,16 @@ class CsiCamera(Node):
                 time.sleep(0.05)
                 continue
             self.failures = 0
-            stamp = self.get_clock().now().to_msg()
+            now = self.get_clock().now()
+            stamp = now.to_msg()
+            age = 0.0
+            if self.capture_stamp and self.is_v4l2:
+                # The driver's buffer time is on the monotonic clock: how long ago, then.
+                age = time.monotonic() - self.cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+                if 0.0 <= age < 1.0:
+                    stamp = (now - Duration(seconds=age)).to_msg()
+                else:
+                    age = 0.0
             if self.passthrough and frame.ndim <= 2:
                 data = frame.tobytes()
                 if data[:2] != b'\xff\xd8':
@@ -174,8 +234,26 @@ class CsiCamera(Node):
             self.info.header.stamp = stamp
             self.pub_info.publish(self.info)
             self.count += 1
-            if self.count % 300 == 0:
+            if self.stats:
+                held = (self.get_clock().now() - now).nanoseconds / 1e9
+                self.window.append((len(data), age + held))
+                if time.time() - self.window_start >= 1.0:
+                    self.log_stats()
+            elif self.count % 300 == 0:
                 self.get_logger().info(f'{self.count / (time.time() - self.started):.1f} fps')
+
+    def log_stats(self):
+        """One second: frames, mean size, Mbps, capture (or read) to publish delay."""
+        span = time.time() - self.window_start
+        sizes = np.array([s for s, _ in self.window])
+        delays = np.array([d for _, d in self.window]) * 1000.0
+        if len(sizes):
+            self.get_logger().info(
+                f'stats: {len(sizes) / span:.1f} fps, {sizes.mean() / 1024:.1f} KB, '
+                f'{sizes.sum() * 8 / span / 1e6:.1f} Mbps, to publish ms p50 '
+                f'{np.median(delays):.1f} max {delays.max():.1f}')
+        self.window = []
+        self.window_start = time.time()
 
 
 def main(args=None):
