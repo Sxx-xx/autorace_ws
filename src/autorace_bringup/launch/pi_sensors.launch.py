@@ -60,7 +60,8 @@ def generate_launch_description():
         DeclareLaunchArgument('usb_port', default_value='/dev/ttyACM0'),
         DeclareLaunchArgument('lane', default_value='auto',
                               description='C920 on /camera_lane: true, false, or auto'),
-        # 15 halves the Wi-Fi load on a crowded 2.4 GHz band (the detectors were tuned at 30).
+        # 15 halves the Wi-Fi load on a crowded band (the detectors were tuned at 30). The hotspot
+        # is 5 GHz now (iPhone: Maximize Compatibility off); 2.4 GHz stalled for up to 0.85 s.
         DeclareLaunchArgument('fps', default_value='30'),
     ]
 

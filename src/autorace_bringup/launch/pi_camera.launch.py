@@ -23,7 +23,8 @@
 
 Both publish <ns>/image_raw/compressed and <ns>/camera_info, best effort. On
 the PC, race.launch.py decodes them. fps:=15 halves the Wi-Fi load on a
-crowded 2.4 GHz band (the detectors were tuned at 30).
+crowded band (the detectors were tuned at 30). Use the phone's 5 GHz hotspot:
+90 fps at 10 Mbps arrived at 90.2 Hz there, with 0.4-0.85 s stalls on 2.4 GHz.
 
 The CSI camera fast (csi_camera's docstring): 90 fps needs a 16:9 size and
 the GPU's own JPEG,
