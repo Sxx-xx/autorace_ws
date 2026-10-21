@@ -12,7 +12,8 @@
 Run on the PC with the lane pipeline up (race.launch.py or lane_drive.launch.py):
   python3 tools/lane_view.py                          # C920: /camera_lane
   python3 tools/lane_view.py --camera /camera         # the forward camera
-q or Esc closes it.
+q or Esc closes it. --save FILE writes the mosaic to FILE after --after
+seconds instead of showing a window (and exits), for comparing settings.
 """
 import argparse
 import os
@@ -69,6 +70,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--camera', default='/camera_lane', help='camera namespace')
     parser.add_argument('--profile', default='real')
+    parser.add_argument('--save', help='write the mosaic here and exit, no window')
+    parser.add_argument('--after', type=float, default=8.0, help='seconds before --save')
     args = parser.parse_args()
     bounds = thresholds(args.profile)
 
@@ -90,8 +93,9 @@ def main():
         node.create_subscription(Image, topic, keep(name), qos_profile_sensor_data)
 
     title = 'AutoRace lane preprocessing (q: quit)'
-    cv2.namedWindow(title, cv2.WINDOW_NORMAL)
-    rates, since = {}, time.time()
+    if not args.save:
+        cv2.namedWindow(title, cv2.WINDOW_NORMAL)
+    rates, since, began = {}, time.time(), time.time()
     while rclpy.ok():
         rclpy.spin_once(node, timeout_sec=0.01)
         if time.time() - since >= 1.0:
@@ -112,6 +116,11 @@ def main():
                          tile(latest.get('detector'), '3 detector /detect/image_lane' + rate('detector'))])
         bottom = np.hstack([tile(yellow, '4 yellow HSV mask'), tile(white, '5 white HSV mask'),
                             tile(edges, '6 Sobel x')])
+        if args.save:
+            if time.time() - began >= args.after:
+                cv2.imwrite(args.save, np.vstack([top, bottom]))
+                break
+            continue
         cv2.imshow(title, np.vstack([top, bottom]))
         if cv2.waitKey(1) & 0xFF in (ord('q'), 27):
             break
