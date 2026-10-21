@@ -115,6 +115,7 @@ class CsiCamera(Node):
         self.failures = 0
         self.started = time.time()
         self.window = []            # (bytes, capture to publish s) over the current second
+        self.unstamped = []         # buffer-time ages that could not be used, this second
         self.window_start = time.time()
 
     def open(self):
@@ -217,6 +218,8 @@ class CsiCamera(Node):
                 if 0.0 <= age < 1.0:
                     stamp = (now - Duration(seconds=age)).to_msg()
                 else:
+                    # No usable buffer time: the read time instead, counted and shown in stats.
+                    self.unstamped.append(age)
                     age = 0.0
             if self.passthrough and frame.ndim <= 2:
                 data = frame.tobytes()
@@ -254,8 +257,11 @@ class CsiCamera(Node):
             self.get_logger().info(
                 f'stats: {len(sizes) / span:.1f} fps, {sizes.mean() / 1024:.1f} KB, '
                 f'{sizes.sum() * 8 / span / 1e6:.1f} Mbps, to publish ms p50 '
-                f'{np.median(delays):.1f} max {delays.max():.1f}')
+                f'{np.median(delays):.1f} max {delays.max():.1f}'
+                + (f', {len(self.unstamped)} read-time stamps (buffer age s {self.unstamped[0]:.3f})'
+                   if self.unstamped else ''))
         self.window = []
+        self.unstamped = []
         self.window_start = time.time()
 
 

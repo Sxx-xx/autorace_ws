@@ -1,27 +1,14 @@
 #!/bin/bash
-# The PC's clock follows the Pi's (tools/pi/setup_chrony.sh first): chrony instead of
-# systemd-timesyncd, the Pi as the preferred server, polled every 1-16 s, and the clock stepped
-# whenever it is off by more than 0.1 s (WSL2 jumps after the laptop sleeps). The internet pools
-# stay as a fallback away from the robot.
-# Run once on the PC:  sudo bash tools/setup_chrony_pc.sh [Pi address, default 172.20.10.4]
+# The PC (WSL2) side of the clock: nothing of its own. WSL2's clock is set from Windows' by Hyper-V,
+# Windows serves NTP to the Pi (tools/windows/time_server.ps1, admin), and the Pi follows it
+# (tools/pi/setup_chrony.sh). A time daemon inside WSL only fights Hyper-V (measured 2026-10-22:
+# chrony following the Pi was pulled back 43 ms within 30 s), and in mirrored networking it shares
+# the PC's address and port 123 with Windows' server. So this stops chrony (and timesyncd) here.
+# Run once on the PC:  sudo bash tools/setup_chrony_pc.sh
 set -eu
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
-PI=${1:-172.20.10.4}
-apt-get install -y chrony          # replaces systemd-timesyncd
-grep -q '^sourcedir /etc/chrony/sources.d' /etc/chrony/chrony.conf \
-  || echo 'sourcedir /etc/chrony/sources.d' >> /etc/chrony/chrony.conf
-grep -q '^confdir /etc/chrony/conf.d' /etc/chrony/chrony.conf \
-  || echo 'confdir /etc/chrony/conf.d' >> /etc/chrony/chrony.conf
-cat > /etc/chrony/sources.d/autorace.sources <<EOF
-# AutoRace (tools/setup_chrony_pc.sh): the robot's Pi
-server $PI iburst minpoll 0 maxpoll 4 prefer
-EOF
-cat > /etc/chrony/conf.d/autorace.conf <<'EOF'
-# AutoRace (tools/setup_chrony_pc.sh): step at once when off by more than 0.1 s, at any time.
-makestep 0.1 -1
-EOF
-systemctl enable --now chrony
-systemctl restart chrony
-sleep 8
-chronyc sources
-chronyc tracking | sed -n '1,5p'
+for s in chrony systemd-timesyncd; do
+  systemctl disable --now $s 2>/dev/null || true
+done
+systemctl is-active chrony systemd-timesyncd 2>/dev/null | paste -sd' ' || true
+echo "WSL's clock: Hyper-V from Windows; check the Pi with  ssh <pi> chronyc sources"

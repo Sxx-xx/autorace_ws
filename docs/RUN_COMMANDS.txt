@@ -27,10 +27,12 @@ ssh dd@172.20.10.4 'cd ~/autorace_ws && git merge --ff-only laptop/real-review &
 #   노트북 (관리자 PowerShell, 5 GHz 우선·로밍 최하·패킷 통합 끔·배터리에서도 최대 성능):
 #     powershell -ExecutionPolicy Bypass -File \\wsl$\Ubuntu-24.04\home\songh\autorace_ws\tools\windows\wifi_5ghz.ps1
 #   되돌리기: setup_wifi.sh --undo,  wifi_5ghz.ps1 -Undo
-# [처음 한 번] 시계 동기 (노트북 시계가 Pi 를 따른다; 핫스팟의 인터넷 NTP 는 지터 ~110 ms 라 못 쓴다)
-#   ssh -t dd@172.20.10.4 'sudo bash ~/autorace_ws/tools/pi/setup_chrony.sh'      # Pi 먼저
-#   sudo bash tools/setup_chrony_pc.sh 172.20.10.4                                 # 그다음 노트북
-#   확인: chronyc sources (노트북, 172.20.10.4 앞에 ^*),  tools/check_robot.sh 의 clock offset
+# [처음 한 번] 시계 동기: 파이가 노트북(Windows) 시계를 따른다 (2026-10-22 설정 완료)
+#   노트북 (관리자 PowerShell, Windows 를 NTP 서버로):
+#     powershell -ExecutionPolicy Bypass -File \\wsl$\Ubuntu-24.04\home\songh\autorace_ws\tools\windows\time_server.ps1
+#   WSL (chrony 끔, Hyper-V 가 Windows 시계에 맞춘다):  sudo bash tools/setup_chrony_pc.sh
+#   Pi:  ssh -t dd@172.20.10.4 'sudo bash ~/autorace_ws/tools/pi/setup_chrony.sh 172.20.10.2'
+#   확인: ssh dd@172.20.10.4 chronyc sources  (172.20.10.2 앞에 ^*),  tools/check_robot.sh 의 clock offset
 
 --------------------------------------------------------------------
 1. [노트북 터미널 1] Pi 쪽 전부 켜기: 베이스(OpenCR), 라이다, 카메라
