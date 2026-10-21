@@ -72,6 +72,9 @@ python3 tools/estop.py
 cd ~/autorace_ws && source install/setup.bash
 ros2 launch autorace_bringup race.launch.py
 #   같은 것: ros2 launch autorace_bringup laptop_compute.launch.py  (인자도 같다)
+#   차선 처리는 기본이 통합 노드 lane_pipeline (압축 해제 + BEV + 검출을 한 프로세스에서).
+#     예전 분리 노드: lane_pipeline:=nodes,  초당 처리 통계: lane_stats:=true
+#     2026-10-22 실측: 60 fps 카메라 → 노트북 처리 3분간 평균 60.1 Hz, 최소 51.9 Hz (30 Hz 미만 0초)
 #   신호등 없이 바로 출발:  ros2 launch autorace_bringup race.launch.py auto_start:=true
 #   일부 미션만:            ros2 launch autorace_bringup race.launch.py missions:=construction,parking
 #   차선 주행만:            ros2 launch autorace_bringup race.launch.py missions:=none
@@ -122,7 +125,9 @@ ros2 launch autorace_bringup view_camera.launch.py decode:=false camera_topic:=/
 ros2 launch autorace_bringup view_camera.launch.py
 # 차선 전처리 과정을 한 창에 (imshow: 카메라, BEV, 검출 결과, 노랑/흰색 마스크, Sobel)
 python3 tools/lane_view.py                     # C920 (/camera_lane)
-#   C920 없이 Pi 카메라로 (레이스 대신): Pi 에서 ~/start_all.sh cameras, 노트북에서
+#   C920 없이 Pi 카메라로 (레이스 대신, 60 fps):
+#     ssh dd@172.20.10.4 '~/start_cameras.sh lane:=false forward_width:=384 forward_height:=216 forward_fps:=60 passthrough:=true bitrate:=6000000 stamp:=capture'
+#   그다음 노트북에서
 #   ros2 launch tools/lane_demo_picam.launch.py  &  python3 tools/lane_view.py --camera /camera
 # 차선 인식 결과 / 라이다·미션 상태
 ros2 run rqt_image_view rqt_image_view /camera/image_projected

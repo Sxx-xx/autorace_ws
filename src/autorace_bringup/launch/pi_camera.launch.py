@@ -46,7 +46,6 @@ C920 = '/dev/v4l/by-id/usb-046d_HD_Pro_Webcam_C920-video-index0'
 
 
 def cameras(context):
-    fps = ParameterValue(LaunchConfiguration('fps'), value_type=int)
 
     def integer(name):
         return ParameterValue(LaunchConfiguration(name), value_type=int)
@@ -70,15 +69,21 @@ def cameras(context):
                          'controls': LaunchConfiguration('controls'),
                          **common}]))
     lane = LaunchConfiguration('lane').perform(context).lower()
-    if lane == 'true' or (lane == 'auto' and os.path.exists(C920)):
+    lane_device = LaunchConfiguration('lane_device').perform(context)
+    if lane == 'true' or (lane == 'auto' and os.path.exists(lane_device)):
         nodes.append(Node(
             package='autorace_bringup', executable='csi_camera', name='csi_camera',
             namespace='camera_lane', output='screen',
-            parameters=[{'v4l2_device': C920, 'width': 432, 'height': 240, 'fps': fps,
-                         'passthrough': True, 'fov_deg': 70.4,
+            parameters=[{'v4l2_device': LaunchConfiguration('lane_device'),
+                         'width': integer('lane_width'), 'height': integer('lane_height'),
+                         'fps': integer('lane_fps' if LaunchConfiguration('lane_fps')
+                                        .perform(context) else 'fps'),
+                         'passthrough': True,
+                         'fov_deg': ParameterValue(LaunchConfiguration('lane_fov_deg'),
+                                                   value_type=float),
                          'frame_id': 'camera_lane_link', **common}]))
     elif lane == 'auto':
-        nodes.append(LogInfo(msg=f'lane camera not started: no {C920}'))
+        nodes.append(LogInfo(msg=f'lane camera not started: no {lane_device}'))
     return nodes
 
 
@@ -102,6 +107,14 @@ def generate_launch_description():
         DeclareLaunchArgument('exposure_us', default_value='0', description='0: automatic'),
         DeclareLaunchArgument('controls', default_value='',
                               description="other V4L2 controls, 'name=value,...'"),
+        # The lane camera: the C920 (30 fps at most) by default; a faster USB camera that sends
+        # MJPEG by its /dev/v4l/by-id path, size and rate (the lane pipeline on the PC keeps up
+        # with 50-60 Hz: 2026-10-22).
+        DeclareLaunchArgument('lane_device', default_value=C920),
+        DeclareLaunchArgument('lane_width', default_value='432'),
+        DeclareLaunchArgument('lane_height', default_value='240'),
+        DeclareLaunchArgument('lane_fps', default_value=''),
+        DeclareLaunchArgument('lane_fov_deg', default_value='70.4'),
         # Both cameras.
         DeclareLaunchArgument('stamp', default_value='publish',
                               description="'capture': the time the frame was taken"),
