@@ -123,7 +123,9 @@ ros2 launch autorace_bringup view_camera.launch.py decode:=false
 ros2 launch autorace_bringup view_camera.launch.py decode:=false camera_topic:=/camera_lane/image_raw
 # 레이스 없이 카메라만 볼 때
 ros2 launch autorace_bringup view_camera.launch.py
-# 차선 전처리 과정을 한 창에 (imshow: 카메라, BEV, 검출 결과, 노랑/흰색 마스크, Sobel)
+# 최종 화면 (imshow): 카메라 원본 위에 찾은 차선(노랑선=파랑, 흰선=자홍), 기억 경로(청록),
+#   목표점(빨강), 컨트롤러가 따라갈 원호(초록). 처리 속도에 영향이 거의 없다.
+#   --map: 검출기의 위에서 본 지도,  --all: 6단계 전체 (처리를 느리게 한다)
 python3 tools/lane_view.py                     # C920 (/camera_lane)
 #   C920 없이 Pi 카메라로 (레이스 대신, 60 fps):
 #     ssh dd@172.20.10.4 '~/start_cameras.sh lane:=false forward_width:=384 forward_height:=216 forward_fps:=60 passthrough:=true bitrate:=6000000 stamp:=capture'

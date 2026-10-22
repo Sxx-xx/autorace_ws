@@ -136,7 +136,8 @@ def main():
                 continue
             final = cv2.resize(final, None, fx=args.scale, fy=args.scale,
                                interpolation=cv2.INTER_NEAREST)
-            cv2.putText(final, f'{rates.get("detector", 0):.0f} Hz', (8, final.shape[0] - 10),
+            label = f'shown {rates.get("detector", 0):.0f} Hz'
+            cv2.putText(final, label, (final.shape[1] - 170, 26),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             if args.save:
                 if time.time() - began >= args.after:

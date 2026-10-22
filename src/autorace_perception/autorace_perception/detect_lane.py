@@ -56,6 +56,7 @@ know where the road ends rather than where its middle is.
 """
 
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 
 from autorace_msgs.msg import MissionState
 import cv2
@@ -353,6 +354,7 @@ class DetectLane(Node):
         self.follow_time = 0.0
         self.mission_state = None
         self.overlay = None         # this picture's lines, target and path (lane_pipeline draws it)
+        self.pool = ThreadPoolExecutor(max_workers=1)   # the yellow line's half of each step
 
         self.create_subscription(Image, '/detect/image_input', self.callback_image,
                                  qos_profile_sensor_data)
@@ -659,8 +661,9 @@ class DetectLane(Node):
     def find_target(self, yellow_mask, white_mask):
         """Pick the candidate on the lane centre: (index, state), or (None, LANE_NONE)."""
         half = self.lane_width / 2.0
-        yellow, yellow_ok = self.line_along_arc(yellow_mask, 'left')
+        yellow_job = self.pool.submit(self.line_along_arc, yellow_mask, 'left')
         white, white_ok = self.line_along_arc(white_mask, 'right')
+        yellow, yellow_ok = yellow_job.result()
         clear = self.clear_way(yellow_mask | white_mask)
         yellow_ok &= clear
         white_ok &= clear
@@ -723,10 +726,12 @@ class DetectLane(Node):
         bright = self.thin_bright(hsv) if self.white_contrast_min > 0 else None
         if support is not None:
             bright = support if bright is None else cv2.bitwise_and(bright, support)
-        yellow_pixels, yellow_mask, self.reliability_yellow = self.mask_line(
-            hsv, self.yellow, self.reliability_yellow, only=support)
+        # The two colours are independent and OpenCV lets go of the GIL: side by side.
+        yellow_job = self.pool.submit(self.mask_line, hsv, self.yellow, self.reliability_yellow,
+                                      only=support)
         white_pixels, white_mask, self.reliability_white = self.mask_line(
             hsv, self.white, self.reliability_white, only=bright)
+        yellow_pixels, yellow_mask, self.reliability_yellow = yellow_job.result()
 
         self.pub_reliability_yellow.publish(UInt8(data=self.reliability_yellow))
         self.pub_reliability_white.publish(UInt8(data=self.reliability_white))

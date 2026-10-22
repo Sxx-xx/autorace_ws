@@ -11,7 +11,6 @@ import time
 import cv2
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PointStamped
 from nav_msgs.msg import Odometry
 from rclpy.executors import SingleThreadedExecutor
 from std_msgs.msg import Bool, Header
