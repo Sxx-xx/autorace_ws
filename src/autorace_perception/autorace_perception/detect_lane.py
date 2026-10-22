@@ -74,6 +74,9 @@ from std_msgs.msg import Header
 from std_msgs.msg import String
 from std_msgs.msg import UInt8
 
+from autorace_perception.line_support import declare as declare_hough
+from autorace_perception.line_support import line_support
+
 
 # lane_state values, kept compatible with turtlebot3_autorace.
 LANE_NONE = 0
@@ -258,6 +261,7 @@ class DetectLane(Node):
         # A request to follow one line only lapses when it stops being repeated.
         self.declare_parameter('follow_timeout', 0.5)
         self.declare_parameter('publish_debug_image', True)
+        self.hough = declare_hough(self)
         # The debug picture at most this often (Hz; 0: every picture), and only when watched.
         self.declare_parameter('debug_rate', 0.0)
 
@@ -348,6 +352,7 @@ class DetectLane(Node):
         self.follow = None
         self.follow_time = 0.0
         self.mission_state = None
+        self.overlay = None         # this picture's lines, target and path (lane_pipeline draws it)
 
         self.create_subscription(Image, '/detect/image_input', self.callback_image,
                                  qos_profile_sensor_data)
@@ -712,11 +717,16 @@ class DetectLane(Node):
                 self.lookahead = lookahead
                 self.build_arc()
 
+        # Colour only where it lies on a long straight edge (line_support: grayscale, blur,
+        # Canny, Hough): glare, floor tiles and specks of the line's colour drop out.
+        support = line_support(image, self.ppm, self.hough)
+        bright = self.thin_bright(hsv) if self.white_contrast_min > 0 else None
+        if support is not None:
+            bright = support if bright is None else cv2.bitwise_and(bright, support)
         yellow_pixels, yellow_mask, self.reliability_yellow = self.mask_line(
-            hsv, self.yellow, self.reliability_yellow)
+            hsv, self.yellow, self.reliability_yellow, only=support)
         white_pixels, white_mask, self.reliability_white = self.mask_line(
-            hsv, self.white, self.reliability_white,
-            only=self.thin_bright(hsv) if self.white_contrast_min > 0 else None)
+            hsv, self.white, self.reliability_white, only=bright)
 
         self.pub_reliability_yellow.publish(UInt8(data=self.reliability_yellow))
         self.pub_reliability_white.publish(UInt8(data=self.reliability_white))
@@ -805,8 +815,20 @@ class DetectLane(Node):
             point.point.y = left
             self.pub_target.publish(point)
 
+        self.overlay = {'yellow': yellow_points, 'white': white_points, 'target': target,
+                        'state': state, 'path': self.path_in_view()}
         if self.publish_debug and self.debug_due():
             self.publish_debug_image(yellow_map, white_map, target, state, header)
+
+    def path_in_view(self):
+        """The remembered lane centre (path_follow) in metres from the axle at this picture."""
+        if not self.path or self.pose is None:
+            return np.zeros((0, 2))
+        pts = np.array([(px, py) for px, py, _ in self.path])
+        x, y, yaw = self.pose
+        c, s = np.cos(yaw), np.sin(yaw)
+        dx, dy = pts[:, 0] - x, pts[:, 1] - y
+        return np.stack([c * dx + s * dy, -s * dx + c * dy], axis=1)
 
     def debug_due(self):
         """Whether to draw the debug picture now: someone watching, at most debug_rate Hz."""

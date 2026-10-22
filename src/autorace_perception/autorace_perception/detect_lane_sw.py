@@ -26,8 +26,10 @@ publishes, so lane_controller and the missions do not know which one runs.
                       camera_info); here only its scale is needed: bev.near
                       (m from the axle to the bottom row), bev.pixels_per_meter
   2. binarise         binarise(): HSV thresholds for the yellow and the white
-                      line (detect.lane.*), and for white also a Sobel x edge
-                      nearby (sliding.sobel_min; 0 leaves it out)
+                      line (detect.lane.*), kept only on long straight edges
+                      (line_support: grayscale, blur, Canny, Hough; detect.hough.*),
+                      and for white also a Sobel x edge nearby (sliding.sobel_min;
+                      0 leaves it out)
   3. sliding windows  find_line(): from the column histogram's peak at the
                       bottom, windows up the picture, each recentred on the
                       line pixels in it; a parabola left(ahead) through all
@@ -63,6 +65,9 @@ from std_msgs.msg import Header
 from std_msgs.msg import String
 from std_msgs.msg import UInt8
 
+from autorace_perception.line_support import declare as declare_hough
+from autorace_perception.line_support import line_support
+
 
 LANE_NONE = 0
 LANE_LEFT_ONLY = 1
@@ -90,6 +95,7 @@ class DetectLaneSlidingWindow(Node):
         self.declare_parameter('hold_last_center_sec', 0.4)
         self.declare_parameter('follow_timeout', 0.5)
         self.declare_parameter('publish_debug_image', True)
+        self.hough = declare_hough(self)
         # The debug picture at most this often (Hz; 0: every picture), and only when watched.
         self.declare_parameter('debug_rate', 0.0)
         # This node's own.
@@ -139,6 +145,7 @@ class DetectLaneSlidingWindow(Node):
         self.last_target_time = 0.0
         self.follow = None
         self.follow_time = 0.0
+        self.overlay = None         # this picture's lines and target (lane_pipeline draws it)
 
         self.create_subscription(Image, '/detect/image_input', self.callback_image,
                                  qos_profile_sensor_data)
@@ -178,7 +185,11 @@ class DetectLaneSlidingWindow(Node):
             edge = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
             edge = cv2.dilate((edge >= self.sobel_min).astype(np.uint8) * 255, self.line_kernel)
             masks['white'] &= edge
+        # Colour only on long straight edges (grayscale, blur, Canny, Hough).
+        support = line_support(image, self.ppm, self.hough)
         for colour in masks:
+            if support is not None:
+                masks[colour] &= support
             masks[colour] = cv2.morphologyEx(masks[colour], cv2.MORPH_OPEN, self.speck_kernel)
         return masks
 
@@ -276,6 +287,10 @@ class DetectLaneSlidingWindow(Node):
             point.point.x, point.point.y = target
             self.pub_target.publish(point)
             self.pub_offset.publish(Float64(data=-target[1]))
+        none = np.zeros((0, 2))
+        self.overlay = {'yellow': lines['yellow'][1] if lines['yellow'] is not None else none,
+                        'white': lines['white'][1] if lines['white'] is not None else none,
+                        'target': target, 'state': state, 'path': none}
         if self.publish_debug and self.debug_due():
             self.publish_debug_image(image.shape, masks, boxes, lines, target, state, header)
 

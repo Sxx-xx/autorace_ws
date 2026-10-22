@@ -36,6 +36,14 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 from autorace_bringup.launch_helpers import decoded_topic, republish
+import yaml
+
+
+def controller_gain(params_file):
+    """lane_controller's pursuit_gain from the parameter file (1.0, its default, if not set)."""
+    with open(params_file) as f:
+        section = yaml.safe_load(f).get('lane_controller', {}).get('ros__parameters', {})
+    return float(section.get('pursuit_gain', 1.0))
 
 
 def launch_setup(context):
@@ -65,7 +73,10 @@ def launch_setup(context):
             parameters=[params, sim_time,
                         {'stats': LaunchConfiguration('lane_stats'),
                          'debug_rate': ParameterValue(LaunchConfiguration('lane_view_rate'),
-                                                      value_type=float)}],
+                                                      value_type=float),
+                         'overlay_rate': ParameterValue(LaunchConfiguration('lane_view_rate'),
+                                                        value_type=float),
+                         'pursuit_gain': controller_gain(params)}],
             remappings=[
                 ('/camera/image_compressed', camera_topic + '/compressed'),
                 ('/camera/camera_info', camera_info_topic),

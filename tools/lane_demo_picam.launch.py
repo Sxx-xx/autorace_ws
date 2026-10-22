@@ -17,6 +17,14 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 from autorace_bringup.launch_helpers import republish
+import yaml
+
+
+def controller_gain(params_file):
+    """lane_controller's pursuit_gain from the parameter file, for the overlay's arc."""
+    with open(params_file) as f:
+        section = yaml.safe_load(f).get('lane_controller', {}).get('ros__parameters', {})
+    return float(section.get('pursuit_gain', 1.0))
 
 # The forward (Pi) camera as docs/REAL_ROBOT.md has it: 4.5 cm ahead of the axle, 12 cm up,
 # 0.10 rad down. Its 62 deg lens (csi_camera fov_deg) sees the floor from ~0.25 m on.
@@ -34,7 +42,9 @@ def nodes(context):
         return [Node(
             package='autorace_perception', executable='lane_pipeline', output='screen',
             arguments=['--detector', detector],
-            parameters=[params, PICAM, view, {'stats': True}],
+            parameters=[params, PICAM, view,
+                        {'stats': True, 'overlay_rate': view['debug_rate'],
+                         'pursuit_gain': controller_gain(params)}],
             remappings=[('/camera/image_compressed', '/camera/image_raw/compressed'),
                         ('/camera/camera_info', '/camera/camera_info'),
                         ('/camera/image_output', '/camera/image_projected'),

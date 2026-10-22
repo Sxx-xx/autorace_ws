@@ -79,6 +79,9 @@ class CsiCamera(Node):
         self.declare_parameter('fov_deg', 62.0)
         self.declare_parameter('exposure_us', 0)       # 0: automatic
         self.declare_parameter('bitrate', 0)           # passthrough MJPEG, bits/s; 0: driver's
+        # The picture turned by the driver (bcm2835-v4l2's rotate control: on the GPU, before
+        # the JPEG, so passthrough keeps it), degrees: 180 for a camera mounted upside down.
+        self.declare_parameter('rotate', 0)
         self.declare_parameter('controls', '')         # 'name=value,...' for v4l2-ctl
         self.declare_parameter('stamp', 'publish')     # or 'capture'
         self.declare_parameter('stats', False)
@@ -88,6 +91,7 @@ class CsiCamera(Node):
         self.passthrough = p('passthrough').value
         self.exposure_us = p('exposure_us').value
         self.bitrate = p('bitrate').value
+        self.rotate = p('rotate').value
         self.controls = p('controls').value
         self.capture_stamp = p('stamp').value == 'capture'
         self.stats = p('stats').value
@@ -139,6 +143,11 @@ class CsiCamera(Node):
         controls = [c for c in self.controls.split(',') if c.strip()]
         if self.passthrough and self.bitrate > 0 and self.has_control('video_bitrate'):
             controls.insert(0, f'video_bitrate={self.bitrate}')
+        if self.rotate and self.source.startswith('/dev/'):
+            if self.has_control('rotate'):
+                controls.append(f'rotate={self.rotate}')
+            else:
+                self.get_logger().warn(f'{self.source} has no rotate control: picture not turned')
         if self.exposure_us > 0:
             # bcm2835-v4l2 and UVC: auto_exposure 1 is manual, exposure_time_absolute in 100 us.
             controls += ['auto_exposure=1',

@@ -67,6 +67,7 @@ def cameras(context):
                          'bitrate': integer('bitrate'),
                          'exposure_us': integer('exposure_us'),
                          'controls': LaunchConfiguration('controls'),
+                         'rotate': integer('forward_rotate'),
                          **common}]))
     lane = LaunchConfiguration('lane').perform(context).lower()
     lane_device = LaunchConfiguration('lane_device').perform(context)
@@ -98,6 +99,9 @@ def generate_launch_description():
         DeclareLaunchArgument('forward_width', default_value='320'),
         DeclareLaunchArgument('forward_height', default_value='240'),
         DeclareLaunchArgument('forward_fps', default_value=''),
+        # The CSI camera is mounted upside down on this robot (2026-10-23): turned by the GPU.
+        DeclareLaunchArgument('forward_rotate', default_value='180',
+                              description='0, 90, 180 or 270 degrees'),
         DeclareLaunchArgument('passthrough', default_value='false',
                               description="send the GPU's MJPEG as it is"),
         DeclareLaunchArgument('quality', default_value='80',

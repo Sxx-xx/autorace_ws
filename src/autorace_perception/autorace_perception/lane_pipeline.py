@@ -38,10 +38,19 @@ picture). The bird's eye view (/camera/image_output, for detect_stop_line) and
 the decoded picture (<camera>/image_decoded, for tools/lane_view.py) go out only
 while someone subscribes, the latter at most preview_rate Hz.
 
+The overlay (/detect/image_overlay, while subscribed, at most overlay_rate Hz)
+is the camera picture itself with what came of it drawn on: the lines found
+(yellow line in blue, white line in magenta, so they stand out on the lines
+themselves), the remembered lane centre (path_follow, cyan), the target
+(red) and the arc from the axle through the target that lane_controller drives
+(pure pursuit with its pursuit_gain, green). Ground points go into the picture
+through the same camera model as the bird's eye view (bev_projector.project).
+
 stats:=true logs once a second: pictures in, pictures done, and the time each
 took (p50 / p95 / max ms) split into decode, BEV and detection.
 """
 
+from collections import deque
 import sys
 import time
 
@@ -65,14 +74,22 @@ class LanePipeline(BevProjector):
         super().__init__()
         self.declare_parameter('stats', False)
         self.declare_parameter('preview_rate', 10.0)
+        self.declare_parameter('overlay_rate', 30.0)
+        # lane_controller's, for drawing the arc it drives (the launch file passes it on).
+        self.declare_parameter('pursuit_gain', 1.0)
         self.stats = self.get_parameter('stats').value
         self.preview_rate = self.get_parameter('preview_rate').value
+        self.overlay_rate = self.get_parameter('overlay_rate').value
+        self.pursuit_gain = self.get_parameter('pursuit_gain').value
         self.detector = detector
 
         self.create_subscription(CompressedImage, '/camera/image_compressed',
                                  self.callback_compressed, qos_profile_sensor_data)
         self.pub_preview = self.create_publisher(Image, '/camera/image_decoded', 1)
+        self.pub_overlay = self.create_publisher(Image, '/detect/image_overlay', 1)
         self.preview_time = 0.0
+        self.overlay_time = 0.0
+        self.shown = deque(maxlen=60)   # overlay times over the last second, for its label
         self.received = 0
         self.timings = []           # (decode, bev, detect) seconds, this second
         self.window_start = time.monotonic()
@@ -104,11 +121,72 @@ class LanePipeline(BevProjector):
             out = self.bridge.cv2_to_imgmsg(image, 'bgr8')
             out.header = msg.header
             self.pub_preview.publish(out)
+        # 5 ms of slack: at 60 fps a 30 Hz limit is every second picture.
+        if (self.pub_overlay.get_subscription_count() > 0
+                and time.monotonic() - self.overlay_time >= 1.0 / self.overlay_rate - 0.005):
+            self.overlay_time = time.monotonic()
+            out = self.bridge.cv2_to_imgmsg(self.draw_overlay(image), 'bgr8')
+            out.header = msg.header
+            self.pub_overlay.publish(out)
 
         if self.stats:
             self.timings.append((t1 - t0, t2 - t1, t3 - t2))
             if time.monotonic() - self.window_start >= 1.0:
                 self.log_stats()
+
+    def to_image(self, points):
+        """Pixels of ground points (metres ahead, left of the axle) in front of the camera."""
+        if len(points) == 0:
+            return np.zeros((0, 2), np.int32)
+        ahead, left = points[:, 0], points[:, 1]
+        # Only what lies in front of the lens: behind it the projection folds over.
+        front = ((ahead - self.forward_offset) * np.cos(self.pitch)
+                 + self.height * np.sin(self.pitch))
+        ok = front > 0.02
+        u, v = self.project(ahead[ok], left[ok])
+        return np.stack([u, v], axis=1).round().astype(np.int32)
+
+    def draw_overlay(self, image):
+        """The camera picture with the lines, the path, the target and the arc driven."""
+        out = image.copy()
+        found = self.detector.overlay
+        h, w = out.shape[:2]
+
+        def dots(points, colour, every=4, radius=1):
+            for u, v in self.to_image(np.asarray(points)[::every]):
+                if 0 <= u < w and 0 <= v < h:
+                    cv2.circle(out, (int(u), int(v)), radius, colour, -1)
+
+        if found is not None:
+            dots(found['yellow'], (255, 0, 0), radius=2)
+            dots(found['white'], (255, 0, 255), radius=2)
+            dots(found['path'], (255, 255, 0), every=1, radius=2)
+            target = found['target']
+            if target is not None:
+                ahead, left = target
+                curvature = self.pursuit_gain * 2.0 * left / (ahead * ahead + left * left)
+                # The arc from the axle, along the heading, as far as the target is.
+                length = np.hypot(ahead, left) * 1.2
+                s = np.linspace(0.0, length, 40)
+                if abs(curvature) < 1e-6:
+                    arc = np.stack([s, np.zeros_like(s)], axis=1)
+                else:
+                    arc = np.stack([np.sin(curvature * s) / curvature,
+                                    (1.0 - np.cos(curvature * s)) / curvature], axis=1)
+                pts = self.to_image(arc)
+                if len(pts) > 1:
+                    cv2.polylines(out, [pts.reshape(-1, 1, 2)], False, (0, 255, 0), 2)
+                tgt = self.to_image(np.array([target]))
+                if len(tgt):
+                    cv2.circle(out, tuple(int(c) for c in tgt[0]), 6, (0, 0, 255), -1)
+            state = {0: 'no lane', 1: 'yellow only', 2: 'both lines', 3: 'white only'}.get(
+                found['state'], str(found['state']))
+            cv2.putText(out, state, (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        now = time.monotonic()
+        self.shown.append(now)
+        rate = sum(1 for t in self.shown if now - t < 1.0)
+        cv2.putText(out, f'{rate} Hz', (6, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        return out
 
     def log_stats(self):
         span = time.monotonic() - self.window_start

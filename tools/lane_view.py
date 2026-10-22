@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """lane_view.py : the lane pipeline's pictures, live, in one OpenCV window (not rqt).
 
-By default only the final picture: the lane detector's own (/detect/image_lane:
-the lines it found, the candidates and the target), enlarged, with its rate.
+By default only the final picture: the camera picture with the lines found,
+the remembered path, the target and the arc the controller drives drawn on
+(/detect/image_overlay, from lane_pipeline), enlarged, with its rate. --map
+shows the detector's own top-down picture (/detect/image_lane) instead.
 Nothing else is subscribed, so lane_pipeline publishes no bird's eye view or
 decoded picture for it and keeps its whole time for the lane. --all shows the
 six steps instead (they cost the pipeline those extra pictures):
@@ -78,6 +80,8 @@ def main():
     parser.add_argument('--profile', default='real')
     parser.add_argument('--all', action='store_true',
                         help='all six steps instead of the final picture only')
+    parser.add_argument('--map', action='store_true',
+                        help="the detector's top-down picture instead of the camera overlay")
     parser.add_argument('--scale', type=float, default=2.0, help='final picture enlarged by')
     parser.add_argument('--save', help='write the picture here and exit, no window')
     parser.add_argument('--after', type=float, default=8.0, help='seconds before --save')
@@ -98,7 +102,8 @@ def main():
             fresh[0] = True
         return callback
 
-    streams = [('detector', '/detect/image_lane')]
+    streams = [('detector', '/detect/image_lane' if args.map or args.all
+                else '/detect/image_overlay')]
     if args.all:
         streams += [('camera', args.camera + '/image_decoded'), ('bev', '/camera/image_projected')]
     for name, topic in streams:
