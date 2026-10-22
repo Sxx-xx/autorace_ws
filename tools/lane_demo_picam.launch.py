@@ -28,7 +28,8 @@ def nodes(context):
     params = os.path.join(get_package_share_directory('autorace_bringup'), 'param',
                           'perception_real.yaml')
     detector = LaunchConfiguration('detector').perform(context)
-    view = {'bev.near': PICAM['bev.near'], 'process_every_n': 1, 'debug_rate': 10.0}
+    view = {'bev.near': PICAM['bev.near'], 'process_every_n': 1,
+            'debug_rate': float(LaunchConfiguration('view_rate').perform(context))}
     if LaunchConfiguration('pipeline').perform(context) == 'integrated':
         return [Node(
             package='autorace_perception', executable='lane_pipeline', output='screen',
@@ -60,5 +61,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('pipeline', default_value='integrated'),
         DeclareLaunchArgument('detector', default_value='detect_lane'),
+        # The detector's picture (what lane_view shows) at most this often, Hz.
+        DeclareLaunchArgument('view_rate', default_value='30'),
         OpaqueFunction(function=nodes),
     ])

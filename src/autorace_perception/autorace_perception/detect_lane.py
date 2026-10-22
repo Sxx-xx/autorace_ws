@@ -813,7 +813,8 @@ class DetectLane(Node):
         if self.pub_image.get_subscription_count() == 0:
             return False
         now = self.now()
-        if self.debug_rate > 0 and now - self.debug_time < 1.0 / self.debug_rate:
+        # 5 ms of slack: at 60 fps a 30 Hz limit is every second picture, not every third.
+        if self.debug_rate > 0 and now - self.debug_time < 1.0 / self.debug_rate - 0.005:
             return False
         self.debug_time = now
         return True

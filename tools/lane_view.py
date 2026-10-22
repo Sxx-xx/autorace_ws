@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """lane_view.py : the lane pipeline's pictures, live, in one OpenCV window (not rqt).
 
+By default only the final picture: the lane detector's own (/detect/image_lane:
+the lines it found, the candidates and the target), enlarged, with its rate.
+Nothing else is subscribed, so lane_pipeline publishes no bird's eye view or
+decoded picture for it and keeps its whole time for the lane. --all shows the
+six steps instead (they cost the pipeline those extra pictures):
+
   1 camera        the decoded lane camera (<camera>/image_decoded)
   2 BEV           bev_projector's bird's eye view (/camera/image_projected)
   3 detector      the lane detector's own picture (/detect/image_lane): the
@@ -70,7 +76,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--camera', default='/camera_lane', help='camera namespace')
     parser.add_argument('--profile', default='real')
-    parser.add_argument('--save', help='write the mosaic here and exit, no window')
+    parser.add_argument('--all', action='store_true',
+                        help='all six steps instead of the final picture only')
+    parser.add_argument('--scale', type=float, default=2.0, help='final picture enlarged by')
+    parser.add_argument('--save', help='write the picture here and exit, no window')
     parser.add_argument('--after', type=float, default=8.0, help='seconds before --save')
     args = parser.parse_args()
     bounds = thresholds(args.profile)
@@ -89,12 +98,14 @@ def main():
             fresh[0] = True
         return callback
 
-    for name, topic in (('camera', args.camera + '/image_decoded'),
-                        ('bev', '/camera/image_projected'),
-                        ('detector', '/detect/image_lane')):
+    streams = [('detector', '/detect/image_lane')]
+    if args.all:
+        streams += [('camera', args.camera + '/image_decoded'), ('bev', '/camera/image_projected')]
+    for name, topic in streams:
         node.create_subscription(Image, topic, keep(name), qos_profile_sensor_data)
 
-    title = 'AutoRace lane preprocessing (q: quit)'
+    title = ('AutoRace lane preprocessing (q: quit)' if args.all
+             else 'AutoRace lane: final picture (q: quit)')
     reason = 'ROS shut down (SIGINT or SIGTERM)'
     if not args.save:
         cv2.namedWindow(title, cv2.WINDOW_NORMAL)
@@ -114,6 +125,24 @@ def main():
                 break
             continue
         fresh[0] = False
+        if not args.all:
+            final = latest.get('detector')
+            if final is None:
+                continue
+            final = cv2.resize(final, None, fx=args.scale, fy=args.scale,
+                               interpolation=cv2.INTER_NEAREST)
+            cv2.putText(final, f'{rates.get("detector", 0):.0f} Hz', (8, final.shape[0] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            if args.save:
+                if time.time() - began >= args.after:
+                    cv2.imwrite(args.save, final)
+                    break
+                continue
+            cv2.imshow(title, final)
+            if cv2.waitKey(1) & 0xFF in (ord('q'), 27):
+                reason = 'q or Esc'
+                break
+            continue
         bev = latest.get('bev')
         yellow = white = edges = None
         if bev is not None:

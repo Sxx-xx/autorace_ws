@@ -33,6 +33,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.actions import OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 from autorace_bringup.launch_helpers import decoded_topic, republish
 
@@ -62,7 +63,9 @@ def launch_setup(context):
             output='screen',
             arguments=['--detector', lane_detector],
             parameters=[params, sim_time,
-                        {'stats': LaunchConfiguration('lane_stats'), 'debug_rate': 10.0}],
+                        {'stats': LaunchConfiguration('lane_stats'),
+                         'debug_rate': ParameterValue(LaunchConfiguration('lane_view_rate'),
+                                                      value_type=float)}],
             remappings=[
                 ('/camera/image_compressed', camera_topic + '/compressed'),
                 ('/camera/camera_info', camera_info_topic),
@@ -138,5 +141,7 @@ def generate_launch_description():
         DeclareLaunchArgument('lane_pipeline', default_value='integrated'),
         DeclareLaunchArgument('lane_stats', default_value='false',
                               description="lane_pipeline's rate and timing, once a second"),
+        DeclareLaunchArgument('lane_view_rate', default_value='30',
+                              description="the detector's picture (tools/lane_view.py) at most, Hz"),
     ]
     return LaunchDescription(declare_args + [OpaqueFunction(function=launch_setup)])
