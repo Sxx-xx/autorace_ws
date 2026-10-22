@@ -77,6 +77,8 @@ from std_msgs.msg import UInt8
 
 from autorace_perception.line_support import declare as declare_hough
 from autorace_perception.line_support import line_support
+from autorace_perception.road_region import declare as declare_road
+from autorace_perception.road_region import road_region
 
 
 # lane_state values, kept compatible with turtlebot3_autorace.
@@ -262,7 +264,12 @@ class DetectLane(Node):
         # A request to follow one line only lapses when it stops being repeated.
         self.declare_parameter('follow_timeout', 0.5)
         self.declare_parameter('publish_debug_image', True)
-        self.hough = declare_hough(self)
+        # Tested on synthetic views (tools/tests/noise_road.py, noise_hough.py, 2026-10-23):
+        # the road region did not help this detector (its own glare and blob filters already
+        # cover it) and costs 3 ms, so it is off unless detect.road.enable says otherwise.
+        self.hough = declare_hough(self, rho_px=2, threshold=25)
+        self.road_params = declare_road(self, enable=False)
+        self.road = None            # this picture's road mask (bird's eye view), for the overlay
         # The debug picture at most this often (Hz; 0: every picture), and only when watched.
         self.declare_parameter('debug_rate', 0.0)
 
@@ -723,6 +730,10 @@ class DetectLane(Node):
         # Colour only where it lies on a long straight edge (line_support: grayscale, blur,
         # Canny, Hough): glare, floor tiles and specks of the line's colour drop out.
         support = line_support(image, self.ppm, self.hough)
+        # And only next to the road the robot is on (road_region): off-road colour is not a line.
+        self.road, band = road_region(hsv, self.ppm, self.road_params)
+        if band is not None:
+            support = band if support is None else cv2.bitwise_and(support, band)
         bright = self.thin_bright(hsv) if self.white_contrast_min > 0 else None
         if support is not None:
             bright = support if bright is None else cv2.bitwise_and(bright, support)

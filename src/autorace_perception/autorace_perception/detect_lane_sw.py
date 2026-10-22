@@ -67,6 +67,8 @@ from std_msgs.msg import UInt8
 
 from autorace_perception.line_support import declare as declare_hough
 from autorace_perception.line_support import line_support
+from autorace_perception.road_region import declare as declare_road
+from autorace_perception.road_region import road_region
 
 
 LANE_NONE = 0
@@ -95,7 +97,11 @@ class DetectLaneSlidingWindow(Node):
         self.declare_parameter('hold_last_center_sec', 0.4)
         self.declare_parameter('follow_timeout', 0.5)
         self.declare_parameter('publish_debug_image', True)
-        self.hough = declare_hough(self)
+        # Tested on synthetic views (tools/tests, 2026-10-23): both help this detector, which has
+        # no glare or blob filter of its own (grey road, noisy: over 3 cm 4 -> 1 of 40).
+        self.hough = declare_hough(self, rho_px=2, threshold=20)
+        self.road_params = declare_road(self, enable=True)
+        self.road = None
         # The debug picture at most this often (Hz; 0: every picture), and only when watched.
         self.declare_parameter('debug_rate', 0.0)
         # This node's own.
@@ -185,8 +191,12 @@ class DetectLaneSlidingWindow(Node):
             edge = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
             edge = cv2.dilate((edge >= self.sobel_min).astype(np.uint8) * 255, self.line_kernel)
             masks['white'] &= edge
-        # Colour only on long straight edges (grayscale, blur, Canny, Hough).
+        # Colour only on long straight edges (grayscale, blur, Canny, Hough), next to the road
+        # the robot is on (road_region).
         support = line_support(image, self.ppm, self.hough)
+        self.road, band = road_region(hsv, self.ppm, self.road_params)
+        if band is not None:
+            support = band if support is None else cv2.bitwise_and(support, band)
         for colour in masks:
             if support is not None:
                 masks[colour] &= support

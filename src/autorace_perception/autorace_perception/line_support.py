@@ -23,9 +23,15 @@ lying along straight segments (probabilistic Hough) at least `min_length_m`
 long; drawn back `support_width_m` thick they cover the strip between them.
 The detectors keep the colour only where it lies on such a segment.
 
-A bend is followed by its chords: at the course's tightest radius a chord of
-5 cm strays from the arc by well under a millimetre, so short segments with
-small gaps (`max_gap_m`) trace it.
+A bend is followed by its chords: at the course's tightest radius (about
+0.2 m) a 5 cm chord strays 1.6 mm (2 px) from the arc, which a Hough
+distance step `rho_px` of 2 takes as one line; a blob's edge (radius of a few
+cm) bends ten times as much and stays out. With rho 1 such bends were cut and
+the target missed by 3-6 cm (synthetic views, 2026-10-23).
+
+Each detector has its own defaults (declare(node, **defaults)), found on
+synthetic noisy views: detect_lane rho 2, threshold 25; detect_lane_sw rho 2,
+threshold 20. A shorter min_length_m keeps bends too but lets blob edges in.
 
 Parameters, under detect.hough (perception_*.yaml), with enable false to go
 back to colour alone:
@@ -42,15 +48,16 @@ DEFAULTS = {
     'canny_low': 40,
     'canny_high': 120,
     'threshold': 20,
+    'rho_px': 1,
     'min_length_m': 0.05,
     'max_gap_m': 0.02,
     'support_width_m': 0.06,
 }
 
 
-def declare(node):
-    """Declare detect.hough.* on a detector node and return them as a dict."""
-    for name, value in DEFAULTS.items():
+def declare(node, **defaults):
+    """Declare detect.hough.* on a detector node (its own defaults over DEFAULTS); return them."""
+    for name, value in {**DEFAULTS, **defaults}.items():
         node.declare_parameter(f'detect.hough.{name}', value)
     return {name: node.get_parameter(f'detect.hough.{name}').value for name in DEFAULTS}
 
@@ -67,7 +74,8 @@ def line_support(image, ppm, params):
     if k > 1:
         gray = cv2.GaussianBlur(gray, (k, k), 0)
     edges = cv2.Canny(gray, params['canny_low'], params['canny_high'])
-    segments = cv2.HoughLinesP(edges, 1, np.pi / 180.0, int(params['threshold']),
+    segments = cv2.HoughLinesP(edges, float(params['rho_px']), np.pi / 180.0,
+                               int(params['threshold']),
                                minLineLength=max(3, int(params['min_length_m'] * ppm)),
                                maxLineGap=max(1, int(params['max_gap_m'] * ppm)))
     support = np.zeros(gray.shape, np.uint8)

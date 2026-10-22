@@ -42,8 +42,9 @@ The overlay (/detect/image_overlay, while subscribed, at most overlay_rate Hz)
 is the camera picture itself with what came of it drawn on: the lines found
 (yellow line in blue, white line in magenta, so they stand out on the lines
 themselves), the remembered lane centre (path_follow, cyan), the target
-(red) and the arc from the axle through the target that lane_controller drives
-(pure pursuit with its pursuit_gain, green). Ground points go into the picture
+(red), the arc from the axle through the target that lane_controller drives
+(pure pursuit with its pursuit_gain, green), and the road the robot is on
+(road_region, tinted green). Ground points go into the picture
 through the same camera model as the bird's eye view (bev_projector.project).
 
 stats:=true logs once a second: pictures in, pictures done, and the time each
@@ -151,6 +152,14 @@ class LanePipeline(BevProjector):
         out = image.copy()
         found = self.detector.overlay
         h, w = out.shape[:2]
+        road = getattr(self.detector, 'road', None)
+        if road is not None:
+            # The road found in the bird's eye view, back into the camera picture, tinted green.
+            back = cv2.warpPerspective(road, self.homography, (w, h),
+                                       flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP)
+            tint = out.copy()
+            tint[back > 0] = (0, 160, 0)
+            out = cv2.addWeighted(tint, 0.35, out, 0.65, 0)
 
         def dots(points, colour, every=4, radius=1):
             for u, v in self.to_image(np.asarray(points)[::every]):

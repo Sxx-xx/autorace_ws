@@ -57,19 +57,10 @@ detect_lane:
       lookahead_max: 0.35
       max_target_angle: 0.7
     detect:
-      # Colour kept only on long straight edges: grayscale -> blur -> Canny -> Hough
-      # (line_support.py). Synthetic noisy views (2026-10-23): targets off by more
-      # than 3 cm 34 -> 11 of 40 for detect_lane, clean views unchanged, +1.5 ms.
-      # Longer min_length_m lost bends; enable: false is colour alone as before.
-      hough:
-        enable: true
-        blur: 5
-        canny_low: 40
-        canny_high: 120
-        threshold: 20
-        min_length_m: 0.05
-        max_gap_m: 0.02
-        support_width_m: 0.06
+      # Colour kept only on long straight edges (grayscale -> blur -> Canny -> Hough,
+      # line_support.py) and, for detect_lane_sw, only next to the road the robot is on
+      # (road_region.py). Each detector keeps its own tested defaults; switch with
+      # hough: {enable: false} or road: {enable: true|false}. Results: tools/tests/noise_*.py.
       # The C920 at 11 cm sees only a short stretch of each line (both lines
       # from 0.24 m): a line is a few thousand pixels at best. Measured on the
       # practice course 2026-10-08: floor L 131 (95th 144), white tape L 199,
