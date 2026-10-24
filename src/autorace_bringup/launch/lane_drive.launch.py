@@ -39,17 +39,23 @@ from autorace_bringup.launch_helpers import decoded_topic, republish
 import yaml
 
 
-def controller_gain(params_file):
-    """lane_controller's pursuit_gain from the parameter file (1.0, its default, if not set)."""
-    with open(params_file) as f:
-        section = yaml.safe_load(f).get('lane_controller', {}).get('ros__parameters', {})
-    return float(section.get('pursuit_gain', 1.0))
+def controller_gain(params_files):
+    """lane_controller's pursuit_gain from the parameter files (the last that sets it; 1.0 if none)."""
+    gain = 1.0
+    for params_file in params_files:
+        with open(params_file) as f:
+            section = (yaml.safe_load(f) or {}).get('lane_controller', {}).get('ros__parameters', {})
+        gain = float(section.get('pursuit_gain', gain))
+    return gain
 
 
 def launch_setup(context):
     pkg_bringup = get_package_share_directory('autorace_bringup')
     profile = LaunchConfiguration('profile').perform(context)
     params = os.path.join(pkg_bringup, 'param', f'perception_{profile}.yaml')
+    # A further file over it (a robot's camera, a test's speed cap): extra_params:=/path.yaml
+    extra = LaunchConfiguration('extra_params').perform(context)
+    params = [params, extra] if extra else [params]
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     sim_time = {'use_sim_time': use_sim_time}
@@ -70,7 +76,7 @@ def launch_setup(context):
             executable='lane_pipeline',
             output='screen',
             arguments=['--detector', lane_detector],
-            parameters=[params, sim_time,
+            parameters=[*params, sim_time,
                         {'stats': LaunchConfiguration('lane_stats'),
                          'debug_rate': ParameterValue(LaunchConfiguration('lane_view_rate'),
                                                       value_type=float),
@@ -97,7 +103,7 @@ def launch_setup(context):
             executable='bev_projector',
             name='bev_projector',
             output='screen',
-            parameters=[params, sim_time],
+            parameters=[*params, sim_time],
             remappings=[
                 ('/camera/image_input', camera_topic),
                 ('/camera/camera_info', camera_info_topic),
@@ -109,7 +115,7 @@ def launch_setup(context):
             executable=detector,
             name='detect_lane',          # either way: its parameters, its topics
             output='screen',
-            parameters=[params, sim_time],
+            parameters=[*params, sim_time],
             remappings=[
                 ('/detect/image_input', '/camera/image_projected'),
                 ('/detect/image_output', '/detect/image_lane'),
@@ -121,7 +127,7 @@ def launch_setup(context):
         executable='lane_controller',
         name='lane_controller',
         output='screen',
-        parameters=[params, sim_time],
+        parameters=[*params, sim_time],
     ))
 
     nodes.append(Node(
@@ -129,7 +135,7 @@ def launch_setup(context):
         executable='cmd_vel_mux',
         name='cmd_vel_mux',
         output='screen',
-        parameters=[params, sim_time],
+        parameters=[*params, sim_time],
     ))
     return nodes
 
@@ -147,6 +153,8 @@ def generate_launch_description():
         # detect_lane (lines remembered along the odometry), or sliding_window
         # (detect_lane_sw: histogram, windows, a parabola per line).
         DeclareLaunchArgument('lane_detector', default_value='detect_lane'),
+        DeclareLaunchArgument('extra_params', default_value='',
+                              description='a parameter file over perception_<profile>.yaml'),
         # integrated: lane_pipeline, decode + BEV + detection in one process (with compressed);
         # nodes: republish, bev_projector and the detector as separate nodes, as before.
         DeclareLaunchArgument('lane_pipeline', default_value='integrated'),

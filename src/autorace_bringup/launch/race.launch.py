@@ -44,6 +44,8 @@ def launch_setup(context):
     pkg_bringup = get_package_share_directory('autorace_bringup')
     profile = LaunchConfiguration('profile').perform(context)
     params = os.path.join(pkg_bringup, 'param', f'mission_{profile}.yaml')
+    extra_params = LaunchConfiguration('extra_params').perform(context)
+    extra_file = [extra_params] if extra_params else []
     perception_params = os.path.join(pkg_bringup, 'param', f'perception_{profile}.yaml')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -76,6 +78,7 @@ def launch_setup(context):
             'lane_detector': LaunchConfiguration('lane_detector'),
             'lane_pipeline': LaunchConfiguration('lane_pipeline'),
             'lane_stats': LaunchConfiguration('lane_stats'),
+            'extra_params': LaunchConfiguration('extra_params'),
         }.items()
     ))
 
@@ -95,7 +98,7 @@ def launch_setup(context):
     def mission(executable, extra=None, remappings=None):
         return Node(
             package='autorace_core', executable=executable, name=executable,
-            output='screen', parameters=[params, sim_time] + ([extra] if extra else []),
+            output='screen', parameters=[params, *extra_file, sim_time] + ([extra] if extra else []),
             remappings=remappings or [],
         )
 
@@ -144,5 +147,8 @@ def generate_launch_description():
         # integrated (lane_pipeline, one process) or nodes (as before); lane_stats:=true logs it.
         DeclareLaunchArgument('lane_pipeline', default_value='integrated'),
         DeclareLaunchArgument('lane_stats', default_value='false'),
+        # A parameter file over the profile's ones (missions and lane drive): a robot's camera,
+        # a test's speed cap. Sections by node name, as in the param/ files.
+        DeclareLaunchArgument('extra_params', default_value=''),
     ]
     return LaunchDescription(declare_args + [OpaqueFunction(function=launch_setup)])

@@ -38,6 +38,9 @@ def nodes(context):
     detector = LaunchConfiguration('detector').perform(context)
     view = {'bev.near': PICAM['bev.near'], 'process_every_n': 1,
             'debug_rate': float(LaunchConfiguration('view_rate').perform(context))}
+    road = LaunchConfiguration('road').perform(context)
+    if road:
+        view['detect.road.enable'] = road == 'true'
     if LaunchConfiguration('pipeline').perform(context) == 'integrated':
         return [Node(
             package='autorace_perception', executable='lane_pipeline', output='screen',
@@ -73,5 +76,7 @@ def generate_launch_description():
         DeclareLaunchArgument('detector', default_value='detect_lane'),
         # The detector's picture (what lane_view shows) at most this often, Hz.
         DeclareLaunchArgument('view_rate', default_value='30'),
+        # true / false: the road region (green on the overlay) on or off; empty: the detector's own.
+        DeclareLaunchArgument('road', default_value=''),
         OpaqueFunction(function=nodes),
     ])

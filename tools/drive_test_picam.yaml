@@ -1,0 +1,32 @@
+# The first lane-driving test on the Pi camera (C920 unplugged), 2026-10-23: race.launch.py
+# extra_params:=$(pwd)/tools/drive_test_picam.yaml lane_camera_topic:=/camera/image_raw
+# lane_camera_info_topic:=/camera/camera_info sign_camera_topic:=/camera/image_raw missions:=none
+# The camera geometry below is written by tools/picam_calibrate.py. Speed, steering and bend
+# values tuned on this camera went into perception_real.yaml (2026-10-25).
+mission_manager:
+  ros__parameters:
+    standby_timeout: 100000.0 # start only on /autorace/manual_start (90 s would start on its own)
+bev_projector:
+  ros__parameters:
+    # Calibrated on one picture of the straight lane, 2026-10-23 (tools/picam_calibrate.py and a search
+    # for the pitch that lays the two lines parallel in the bird's eye view, fov 62 deg as camera_info):
+    # pitch 47.6 deg, height from the lines' 0.33 m spacing 0.180 m. Only ~7 cm of the yellow line was
+    # in view, so +-2 deg is likely; check on the overlay while driving.
+    camera:
+      height: 0.180
+      pitch: 0.831
+      forward_offset: 0.045
+    bev:
+      near: 0.13            # the bottom image row reaches ~0.125 m ahead of the axle
+detect_lane:
+  ros__parameters:
+    bev:
+      near: 0.13
+    detect:
+      lane:
+        # Measured in this room (2026-10-23): yellow tape H 26-28 S 152, the wooden floor beside
+        # the course H 15-17 S 117, which perception_real.yaml's hue 10-127 took for yellow.
+        yellow:
+          hue_l: 21
+          hue_h: 40
+          saturation_l: 100
