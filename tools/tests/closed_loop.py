@@ -3,7 +3,13 @@ simulated robot round a drawn course. Bird's eye views are rendered from the rob
 controller's Twist moves it. Reports how far the axle strays from the lane centre.
   python3 tools/tests/closed_loop.py src/autorace_bringup/param/perception_real.yaml out.png [true|false]
 2026-10-23: the course in 18.8 s, axle off the centre mean 1.1 cm, max 3.1 cm.
+Environment, to be closer to the robot (2026-10-25):
+  TURN_SHARE=0.75  the robot turns only this share of the commanded turn rate (the Burger made
+                   ~75 % in tight bends); the gyro (/imu, 20 Hz, 0.15 s late) shows what it made
+  BEND_R=0.30      radius of the two bends, m (0.45 by default)
 """
+import collections
+import os
 import math
 import sys
 import time
@@ -13,6 +19,7 @@ import numpy as np
 import rclpy
 from nav_msgs.msg import Odometry
 from rclpy.executors import SingleThreadedExecutor
+from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Header
 
 from autorace_core.lane_controller import LaneController
@@ -25,6 +32,8 @@ det = DetectLane()
 ctl = LaneController()
 W, H, PPM, NEAR = 800, 300, det.ppm, det.near
 HALF = 0.33 / 2
+TURN_SHARE = float(os.environ.get('TURN_SHARE', '1.0'))
+BEND_R = float(os.environ.get('BEND_R', '0.45'))
 
 # Course centre line: straight, left 90 deg (R 0.45), straight, right 90 deg (R 0.45), straight.
 pts, x, y, th = [], 0.0, 0.0, 0.0
@@ -35,7 +44,7 @@ def go(length, curvature, step=0.005):
         th += curvature * step
         x += math.cos(th) * step
         y += math.sin(th) * step
-go(0.8, 0.0); go(math.pi / 2 * 0.45, 1 / 0.45); go(0.6, 0.0); go(math.pi / 2 * 0.45, -1 / 0.45); go(1.0, 0.0)
+go(0.8, 0.0); go(math.pi / 2 * BEND_R, 1 / BEND_R); go(0.6, 0.0); go(math.pi / 2 * BEND_R, -1 / BEND_R); go(1.0, 0.0)
 centre = np.array(pts)
 
 # Top-down world picture at 2 mm: grey floor, yellow line left of the centre, white right.
@@ -76,12 +85,21 @@ ex = SingleThreadedExecutor(); ex.add_node(det); ex.add_node(ctl)
 
 px, py, yaw = 0.0, 0.02, 0.0           # 2 cm off the centre at the start
 log, trail = [], []
-t0 = time.monotonic(); last_cam = last_ctl = -1.0; prev = t0
+t0 = time.monotonic(); last_cam = last_ctl = last_imu = -1.0; prev = t0
+gyro = collections.deque()              # (time, turn rate made) for the late /imu
 while True:
     now = time.monotonic()
     dt = now - prev; prev = now
     v, w = cmd
+    w *= TURN_SHARE                        # what the robot really turns
     px += v * math.cos(yaw) * dt; py += v * math.sin(yaw) * dt; yaw += w * dt
+    gyro.append((now, w))
+    if ctl.yr_on and now - last_imu >= 1 / 20:
+        last_imu = now
+        while len(gyro) > 1 and gyro[1][0] <= now - 0.15:
+            gyro.popleft()
+        imu = Imu(); imu.angular_velocity.z = gyro[0][1]
+        ctl.callback_imu(imu)
     stamp = det.get_clock().now().to_msg()
     odo = Odometry(); odo.header.stamp = stamp
     odo.pose.pose.position.x, odo.pose.pose.position.y = px, py
@@ -104,14 +122,18 @@ while True:
 L = np.array([(a, b, c, d) for a, b, c, d, _, _ in log], float)
 err = np.abs(L[:, 1]) * 100
 seg = lambda lo, hi: err[(L[:, 2] >= lo) & (L[:, 2] < hi)]
-n1 = int(0.8 / 0.005); n2 = n1 + int(math.pi / 2 * 0.45 / 0.005); n3 = n2 + int(0.6 / 0.005); n4 = n3 + int(math.pi / 2 * 0.45 / 0.005)
+n1 = int(0.8 / 0.005); n2 = n1 + int(math.pi / 2 * BEND_R / 0.005); n3 = n2 + int(0.6 / 0.005); n4 = n3 + int(math.pi / 2 * BEND_R / 0.005)
+signed = L[:, 1] * 100
 print(f'hough {hough}: {"reached the end" if L[-1, 2] >= len(centre) - 40 else "STOPPED/LEFT THE LANE"} in {L[-1, 0]:.1f} s; '
       f'axle off the centre: mean {err.mean():.1f} cm, max {err.max():.1f} cm')
 for name, (lo, hi) in (('straight 1', (0, n1)), ('left bend', (n1, n2)), ('straight 2', (n2, n3)),
                        ('right bend', (n3, n4)), ('straight 3', (n4, len(centre)))):
     e = seg(lo, hi)
     if len(e):
-        print(f'  {name:10} mean {e.mean():4.1f} cm  max {e.max():4.1f} cm')
+        # Outside of a bend: right of the centre in the left bend, left in the right one.
+        out = signed[(L[:, 2] >= lo) & (L[:, 2] < hi)] * {'left bend': -1, 'right bend': 1}.get(name, 0)
+        wide = f'  outside max {max(0.0, out.max()):4.1f} cm' if name.endswith('bend') else ''
+        print(f'  {name:10} mean {e.mean():4.1f} cm  max {e.max():4.1f} cm{wide}')
 print(f'  target from the remembered path {100 * L[:, 3].mean():.0f} % of the time, from the camera the rest')
 # A picture of the run: the course and the axle's trail.
 img = cv2.resize(world, None, fx=0.25, fy=0.25)

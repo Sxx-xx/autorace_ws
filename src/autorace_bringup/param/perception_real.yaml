@@ -134,13 +134,27 @@ lane_controller:
     # The run starts on the stop line: no creeping up to it before the green.
     standby_speed: 0.0
     # 1.17 (1.0..1.3 tried, 2026-10-09, C920 at ~0.10 m/s). At 0.19 m/s on the Pi camera
-    # 1.17 swung wide out of bends and weaved on the straight; 1.0 much better, 0.9 (2026-10-25).
+    # 1.17 swung wide out of bends and weaved on the straight; 1.0 much better; 0.9 turned too
+    # wide and weaved finding the middle of the straight after; 1.1 tried; back to 0.9 with a
+    # quicker single-line slew instead (2026-10-25).
     pursuit_gain: 0.9
+    # With one line in view (most of a bend) the curvature may change this much per update;
+    # 0.5 (the default) tightened the turn too slowly at 0.19 m/s (2026-10-25).
+    single_line_slew: 1.0
+    # Steer harder in bends only (2026-10-25): the gain grows up to +30 % from curvature 1/m
+    # (1 m radius) to 3/m (0.33 m). On a simulated robot that turns 75 % of the command
+    # (tools/tests/closed_loop.py TURN_SHARE=0.75 BEND_R=0.30) it went 2.8 -> 1.0 cm wide of
+    # the bend and 3.7 -> 2.7 cm off the centre after it; 0.5 and 0.8 cut into the bend.
+    corner_boost: 0.3
+    corner_boost_start: 1.0
+    corner_boost_full: 3.0
     max_angular: 2.0
     cornering_rate: 0.8      # turn rate cap in bends (0.3..0.7 tried, 2026-10-09; 1.0 swung wide, 2026-10-25)
     # The robot turned only 75 % of the command in tight bends (inner wheel at
     # ~0 m/s): make up the difference from the gyro (2026-10-09).
-    yaw_rate_feedback: false  # adaptive mode tried 2026-10-09; off by choice
+    # adaptive mode tried 2026-10-09, then off by choice; on again 2026-10-25 so tight bends
+    # are turned as tightly as commanded at 0.19 m/s on the Pi camera.
+    yaw_rate_feedback: true
     # 'pi' (a P + I loop on the gyro) oscillated on the robot: the gyro comes
     # 0.1-0.2 s late over Wi-Fi. 'adaptive' learns the share of the turn the
     # robot really makes (over 1.5 s) and scales the command by its inverse.

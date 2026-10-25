@@ -163,6 +163,12 @@ class LaneController(Node):
         self.declare_parameter('standby_speed', 0.08)
         # 1.0 is plain pure pursuit; more turns in harder towards the target.
         self.declare_parameter('pursuit_gain', 1.0)
+        # Harder in bends only: the gain grows by up to corner_boost (0.3 = 30 %) as the
+        # curvature asked for grows from corner_boost_start to corner_boost_full (1/m), so the
+        # straights keep pursuit_gain. 0 leaves pursuit_gain alone everywhere.
+        self.declare_parameter('corner_boost', 0.0)
+        self.declare_parameter('corner_boost_start', 1.0)
+        self.declare_parameter('corner_boost_full', 3.0)
         self.declare_parameter('max_angular', 2.0)
         # With one line in view the target is half a lane from it, and where
         # that line is cut short at the exit of a bend the point jumps. The
@@ -240,6 +246,9 @@ class LaneController(Node):
         self.min_speed = self.get_parameter('min_speed').value
         self.standby_speed = self.get_parameter('standby_speed').value
         self.pursuit_gain = self.get_parameter('pursuit_gain').value
+        self.corner_boost = self.get_parameter('corner_boost').value
+        self.corner_boost_start = self.get_parameter('corner_boost_start').value
+        self.corner_boost_full = self.get_parameter('corner_boost_full').value
         self.max_angular = self.get_parameter('max_angular').value
         self.single_line_slew = self.get_parameter('single_line_slew').value
         self.cornering_rate = self.get_parameter('cornering_rate').value
@@ -379,6 +388,7 @@ class LaneController(Node):
             # Curvature of the arc from the axle, along the heading, through
             # the target.
             curvature = self.pursuit_gain * 2.0 * left / (ahead * ahead + left * left)
+            curvature *= self.corner_factor(curvature)
             if self.lane_state != LANE_BOTH:
                 step = max(-self.single_line_slew,
                            min(self.single_line_slew, curvature - self.last_curvature))
@@ -449,6 +459,14 @@ class LaneController(Node):
         dt = min(0.2, max(0.0, now - last))
         a = dt / (self.yr_learn + dt)
         self.yr_share += a * (share - self.yr_share)
+
+    def corner_factor(self, curvature):
+        """How much harder to steer for this curvature: 1 on straights, up to 1 + corner_boost."""
+        if self.corner_boost <= 0.0:
+            return 1.0
+        span = max(1e-6, self.corner_boost_full - self.corner_boost_start)
+        share = (abs(curvature) - self.corner_boost_start) / span
+        return 1.0 + self.corner_boost * max(0.0, min(1.0, share))
 
     def yaw_rate_correct(self, wanted, now):
         """The turn rate to command so that the gyro shows `wanted`."""
