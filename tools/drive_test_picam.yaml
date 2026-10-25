@@ -3,6 +3,25 @@
 # lane_camera_info_topic:=/camera/camera_info sign_camera_topic:=/camera/image_raw missions:=none
 # The camera geometry below is written by tools/picam_calibrate.py. Speed, steering and bend
 # values tuned on this camera went into perception_real.yaml (2026-10-25).
+lane_controller:
+  ros__parameters:
+    # real-lane-pi's controller (2a5c64b, lane following on the Pi with the C920), tried on the
+    # Pi camera 2026-10-25. Delete this section to go back to perception_real.yaml's tuning.
+    # Its look-ahead (0.37..0.55 m) is out of the Pi camera's view (0.13..0.39 m): not taken.
+    max_speed: 0.20           # real-lane-pi 0.22; the mux holds each wheel to 0.20 anyway
+    curve_speed: 0.12         # two-speed mode: slow down in bends
+    curve_enter_curvature: 0.8
+    curve_exit_curvature: 0.5
+    curve_exit_delay: 0.3
+    curve_source: lane        # detect_lane's bend/straight: the steering curvature never let it speed up again
+    pursuit_gain: 1.0
+    cornering_rate: 0.825
+    min_speed: 0.05
+    recovery_speed: 0.05
+    recovery_angular: 0.45
+    single_line_slew: 0.5
+    corner_boost: 0.0         # not in real-lane-pi
+    yaw_rate_feedback: false  # off in real-lane-pi
 mission_manager:
   ros__parameters:
     standby_timeout: 100000.0 # start only on /autorace/manual_start (90 s would start on its own)

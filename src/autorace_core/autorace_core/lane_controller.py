@@ -176,6 +176,20 @@ class LaneController(Node):
         self.declare_parameter('single_line_slew', 0.5)
         # Turn rate above which the robot slows down rather than turn faster.
         self.declare_parameter('cornering_rate', 0.6)
+        # Two-speed mode (from real-lane-pi): max_speed on the straight, curve_speed in a bend
+        # (0 turns it off). A bend starts when the steering curvature passes
+        # curve_enter_curvature (1/m) and ends when it has stayed below
+        # curve_exit_curvature for curve_exit_delay seconds.
+        self.declare_parameter('curve_speed', 0.0)
+        self.declare_parameter('curve_enter_curvature', 1.0)
+        self.declare_parameter('curve_exit_curvature', 0.5)
+        self.declare_parameter('curve_exit_delay', 0.3)
+        # What decides bend or straight: 'steering' = the commanded curvature (above), or
+        # 'lane' = detect_lane's own call (/detect/lane_curve: target off the heading, back to
+        # straight when the lines ahead run straight), falling back to 'steering' while it is
+        # missing. On the robot the steering curvature stayed over curve_exit after a bend
+        # (2-3 cm off the middle is enough), so it never sped up again (2026-10-25).
+        self.declare_parameter('curve_source', 'steering')
         self.declare_parameter('lane_timeout', 0.5)
         self.declare_parameter('recovery_speed', 0.05)
         self.declare_parameter('recovery_angular', 0.45)
@@ -252,6 +266,11 @@ class LaneController(Node):
         self.max_angular = self.get_parameter('max_angular').value
         self.single_line_slew = self.get_parameter('single_line_slew').value
         self.cornering_rate = self.get_parameter('cornering_rate').value
+        self.curve_speed = self.get_parameter('curve_speed').value
+        self.curve_enter = self.get_parameter('curve_enter_curvature').value
+        self.curve_exit = self.get_parameter('curve_exit_curvature').value
+        self.curve_exit_delay = self.get_parameter('curve_exit_delay').value
+        self.curve_source = self.get_parameter('curve_source').value
         self.lane_timeout = self.get_parameter('lane_timeout').value
         self.recovery_speed = self.get_parameter('recovery_speed').value
         self.recovery_angular = self.get_parameter('recovery_angular').value
@@ -300,6 +319,7 @@ class LaneController(Node):
         self.create_subscription(PointStamped, '/detect/lane_target', self.callback_target, 1)
         self.create_subscription(Float64, '/control/max_vel', self.callback_max_vel, 1)
         self.create_subscription(UInt8, '/detect/lane_state', self.callback_state, 1)
+        self.create_subscription(Bool, '/detect/lane_curve', self.callback_lane_curve, 1)
         self.create_subscription(String, '/detect/lane_follow', self.callback_follow, 1)
         self.create_subscription(Bool, '/autorace/run_active', self.callback_run_active, 1)
         self.create_subscription(String, '/control/turn_at_line', self.callback_order, 1)
@@ -318,6 +338,10 @@ class LaneController(Node):
         self.target_time = 0.0
         self.last_angular = 0.0
         self.last_curvature = 0.0
+        self.curve = False
+        self.straight_since = None  # when the curvature last dropped below curve_exit
+        self.lane_curve = None      # detect_lane's bend/straight, and when it came
+        self.lane_curve_time = 0.0
         self.lane_state = 0
         self.follow = None
         self.follow_time = 0.0
@@ -361,6 +385,10 @@ class LaneController(Node):
     def callback_state(self, msg):
         self.lane_state = msg.data
 
+    def callback_lane_curve(self, msg):
+        self.lane_curve = msg.data
+        self.lane_curve_time = self.now()
+
     def callback_follow(self, msg):
         self.follow = msg.data if msg.data in ('left', 'right') else None
         self.follow_time = self.now()
@@ -395,7 +423,18 @@ class LaneController(Node):
                 curvature = self.last_curvature + step
             self.last_curvature = curvature
 
-            speed = self.max_speed if self.run_active else self.standby_speed
+            if (self.curve_source == 'lane' and self.lane_curve is not None
+                    and now - self.lane_curve_time < self.lane_timeout):
+                self.set_curve(self.lane_curve, 'detect_lane')
+            else:
+                self.update_curve(abs(curvature), now)
+
+            if not self.run_active:
+                speed = self.standby_speed
+            elif self.curve_speed > 0.0 and self.curve:
+                speed = self.curve_speed
+            else:
+                speed = self.max_speed
             if self.limit is not None and now - self.limit_time < self.limit_timeout:
                 speed = min(speed, self.limit)
             if abs(curvature) * speed > self.cornering_rate:
@@ -459,6 +498,33 @@ class LaneController(Node):
         dt = min(0.2, max(0.0, now - last))
         a = dt / (self.yr_learn + dt)
         self.yr_share += a * (share - self.yr_share)
+
+    def update_curve(self, curvature, now):
+        """Straight or bend, with hysteresis so the speed does not flicker."""
+        was = self.curve
+        if curvature > self.curve_enter:
+            self.curve = True
+            self.straight_since = None
+        elif curvature < self.curve_exit:
+            if self.straight_since is None:
+                self.straight_since = now
+            elif now - self.straight_since > self.curve_exit_delay:
+                self.curve = False
+        else:
+            self.straight_since = None
+        if self.curve != was:
+            self.straight_since = None
+            self.log_curve(f'curvature {curvature:.2f} /m')
+
+    def set_curve(self, curve, source):
+        if curve != self.curve:
+            self.curve = curve
+            self.straight_since = None
+            self.log_curve(source)
+
+    def log_curve(self, why):
+        if self.curve_speed > 0.0:
+            self.get_logger().info(('Curve' if self.curve else 'Straight') + f' ({why})')
 
     def corner_factor(self, curvature):
         """How much harder to steer for this curvature: 1 on straights, up to 1 + corner_boost."""

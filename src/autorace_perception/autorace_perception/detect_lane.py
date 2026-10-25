@@ -70,6 +70,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
+from std_msgs.msg import Bool
 from std_msgs.msg import Float64
 from std_msgs.msg import Header
 from std_msgs.msg import String
@@ -373,6 +374,9 @@ class DetectLane(Node):
         self.pub_offset = self.create_publisher(Float64, '/detect/lane_offset', 1)
         self.pub_target = self.create_publisher(PointStamped, '/detect/lane_target', 1)
         self.pub_state = self.create_publisher(UInt8, '/detect/lane_state', 1)
+        # Bend or straight as decided below (target angle, straight lines ahead), for
+        # lane_controller's two-speed mode (curve_source: lane).
+        self.pub_curve = self.create_publisher(Bool, '/detect/lane_curve', 1)
         self.pub_reliability_white = self.create_publisher(
             UInt8, '/detect/white_line_reliability', 1)
         self.pub_reliability_yellow = self.create_publisher(
@@ -801,6 +805,7 @@ class DetectLane(Node):
                         self.get_logger().info('Straight again: camera target.')
                 else:
                     self.straight_since = None
+        self.pub_curve.publish(Bool(data=self.in_curve))
         use_path = self.path_follow and (self.path_mode != 'curve' or self.in_curve)
         if self.path_follow and self.odometry:
             _, x, y, yaw, _ = self.odometry[-1]          # where the robot is now

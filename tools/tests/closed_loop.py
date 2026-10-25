@@ -80,6 +80,7 @@ ctl.pub_cmd_vel.publish = lambda m: cmd.__setitem__(slice(0, 2), [m.linear.x, m.
 targets = []
 det.pub_target.publish = lambda m: (targets.append((m.point.x, m.point.y)), ctl.callback_target(m))
 det.pub_state.publish = lambda m: ctl.callback_state(m)
+det.pub_curve.publish = lambda m: ctl.callback_lane_curve(m)
 ctl.callback_run_active(Bool(data=True))
 ex = SingleThreadedExecutor(); ex.add_node(det); ex.add_node(ctl)
 
