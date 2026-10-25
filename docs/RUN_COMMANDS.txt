@@ -137,6 +137,28 @@ python3 tools/mission_marker.py & rviz2 -d tools/scan_view.rviz
 #   RViz 에서 카메라를 직접 볼 때는 Image 표시의 Reliability 를 Best Effort 로 (카메라는 best effort 로 낸다)
 
 --------------------------------------------------------------------
+6-1. (선택) 파이 카메라로 차선 주행 + 터널 테스트 (2026-10-25)
+--------------------------------------------------------------------
+# Pi: 베이스, watchdog, 라이다 + 카메라
+ssh dd@172.20.10.4 '~/start_all.sh robot watchdog lidar'
+ssh dd@172.20.10.4 '~/start_cameras.sh lane:=false forward_width:=640 forward_height:=360 forward_fps:=60 passthrough:=true bitrate:=10000000 stamp:=capture'
+# [노트북 터미널 1] 비상 정지 창
+python3 tools/estop.py
+# [노트북 터미널 2] 차선 주행만 (race 보다 가볍다: 표지판·신호등 검출 없음)
+ros2 launch autorace_bringup lane_drive.launch.py camera_topic:=/camera/image_raw \
+  camera_info_topic:=/camera/camera_info lane_stats:=true extra_params:=$(pwd)/tools/drive_test_picam.yaml
+# [노트북 터미널 3] 터널 (A*): 차선 주행이 몰고 들어가고, 어두움 + 오른쪽 벽이면 넘겨받아
+#   대각선 끝(1.8, 1.8 m)까지, 오른쪽 벽과 평행으로 돌아 나와서 다시 차선 주행에 넘긴다.
+ros2 run autorace_core tunnel_test_mission --ros-args -p start_on:=tunnel -p cmd_vel_topic:=/cmd_vel/mission
+#   터널만 (차선 주행 없이, 바퀴 축을 입구 면에 두고):  ros2 run autorace_core tunnel_test_mission
+#   어두움 기준: 대기 중 로그 'armed: brightness ..' 를 보고 -p dark_threshold:=.. (기본 40), 밝음 80
+# [노트북 터미널 4] 출발 / 정지 (차선 주행과 터널 노드 둘 다 이것으로)
+ros2 topic pub --once -w 1 /autorace/run_active std_msgs/msg/Bool "{data: true}"
+ros2 topic pub --once -w 1 /autorace/run_active std_msgs/msg/Bool "{data: false}"
+# 화면: rviz2 -d tools/tunnel_test.rviz   (라이다, 장애물 격자, 대각 경로, 우회 경로, 목표)
+# 가상 시험 (로봇 없이): python3 tools/tests/tunnel_sim.py   /   python3 tools/tests/closed_loop.py <yaml> out.png
+
+--------------------------------------------------------------------
 7. 끝내기 (이 순서로)
 --------------------------------------------------------------------
 # [터미널 3] race.launch.py 를 Ctrl+C

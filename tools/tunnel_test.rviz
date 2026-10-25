@@ -1,0 +1,89 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.5
+      Plane Cell Count: 12
+      Reference Frame: odom
+      Color: 100; 100; 100
+    - Class: rviz_default_plugins/Map
+      Name: tunnel grid (100 seen, 50 within the robot's radius)
+      Enabled: true
+      Topic:
+        Value: /tunnel_test/grid
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Color Scheme: costmap
+      Alpha: 0.6
+      Draw Behind: true
+    - Class: rviz_default_plugins/LaserScan
+      Name: scan
+      Enabled: true
+      Topic:
+        Value: /scan
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Size (m): 0.03
+      Style: Flat Squares
+      Color Transformer: FlatColor
+      Color: 0; 255; 0
+      Decay Time: 0
+    - Class: rviz_default_plugins/Path
+      Name: route (start -> goal)
+      Enabled: true
+      Topic:
+        Value: /tunnel_test/route
+      Color: 255; 200; 0
+      Line Style: Lines
+      Alpha: 1
+    - Class: rviz_default_plugins/Path
+      Name: path driven for
+      Enabled: true
+      Topic:
+        Value: /tunnel_test/path
+      Color: 255; 40; 40
+      Line Style: Billboards
+      Line Width: 0.02
+      Alpha: 1
+    - Class: rviz_default_plugins/Pose
+      Name: goal
+      Enabled: true
+      Topic:
+        Value: /tunnel_test/goal
+      Shape: Axes
+      Axes Length: 0.2
+      Axes Radius: 0.02
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: false
+      Show Arrows: false
+      Marker Scale: 0.4
+      Frames:
+        All Enabled: false
+        base_footprint:
+          Value: true
+        odom:
+          Value: true
+  Global Options:
+    Fixed Frame: odom
+    Background Color: 40; 40; 40
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: top down
+      Scale: 150
+      X: 1
+      Y: 0
+      Angle: 0
+Window Geometry:
+  Width: 1100
+  Height: 800

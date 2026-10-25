@@ -33,6 +33,7 @@ setup(
             'parking_mission = autorace_core.parking_mission:main',
             'traffic_light_mission = autorace_core.traffic_light_mission:main',
             'tunnel_mission = autorace_core.tunnel_mission:main',
+            'tunnel_test_mission = autorace_core.tunnel_test_mission:main',
 
             'level_crossing_test = autorace_core.level_crossing_test:main',
             'custom_teleop = autorace_core.custom_teleop:main'
