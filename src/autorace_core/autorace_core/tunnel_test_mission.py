@@ -109,11 +109,15 @@ class TunnelTestMission(Node):
         # from right_wall_behind behind the axle to right_wall_ahead ahead, at least
         # right_wall_points of them over right_wall_span along a straight line.
         self.declare_parameter('right_wall_min', 0.05)
-        self.declare_parameter('right_wall_max', 0.32)
+        # 0.45: the entrance's middle is 0.18 m from it, so up to 0.27 m left of the middle
+        # still sees it (0.32 until 2026-10-25: 0.14 m).
+        self.declare_parameter('right_wall_max', 0.45)
         self.declare_parameter('right_wall_behind', 0.40)
         self.declare_parameter('right_wall_ahead', 0.40)
-        self.declare_parameter('right_wall_points', 8)
-        self.declare_parameter('right_wall_span', 0.15)
+        # 20 points over 0.30 m: longer than an obstacle (a 0.15 m box is 0.21 m corner to corner),
+        # which close by gives as many points as a wall (8 and 0.15 m until 2026-10-25).
+        self.declare_parameter('right_wall_points', 20)
+        self.declare_parameter('right_wall_span', 0.30)
         self.declare_parameter('right_wall_max_angle', 0.5)  # rad off the heading
         self.declare_parameter('entry_scans', 2)
         self.declare_parameter('entrance_right', 0.18)   # the entrance's middle from the right wall
