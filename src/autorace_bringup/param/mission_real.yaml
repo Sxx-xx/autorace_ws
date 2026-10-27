@@ -187,6 +187,15 @@ tunnel_mission:
     # (TUNE at the venue: the log prints the brightness on both).
     dark_ratio: 0.5
     bright_ratio: 2.0
+    # From outside (2026-10-28): the entry wall ahead-left, square to the
+    # way, within front_trigger starts the mission; it drives square to the
+    # wall through the entrance's middle (opening_width / 2 right of the
+    # wall's end) at approach_speed. approach_max metres without the doorway
+    # and the dark: not the tunnel, the lane follower goes on.
+    opening_width: 0.34
+    front_trigger: 0.60
+    approach_speed: 0.10
+    approach_max: 1.2
 
 # ---- forward camera detectors (TUNE under the venue's lights) ----
 # Watch /detect/image_sign, /detect/image_traffic_light,

@@ -115,8 +115,9 @@ ros2 topic pub -r 5 /autorace/run_active std_msgs/msg/Bool "{data: true}"   # �
 ros2 launch autorace_bringup race.launch.py
 ros2 launch autorace_bringup race.launch.py auto_start:=true missions:=construction,parking
 
-# 터널만 (tunnel_lane 브랜치에서 가져온 것, 10/27). 로봇을 입구 0.5 m 앞 차선 위에 두면 차선 주행으로
-# 들어가다 Pi 카메라가 어두워지면 터널 미션이 시작되고, 밝아지면 끝난다 (dark_ratio / bright_ratio 는 현장에서).
+# 터널만 (tunnel_lane 브랜치에서 가져온 것, 10/27). 로봇을 입구 1 m 쯤 앞 차선 위에 두면 차선 주행으로 가다
+# 입구 벽이 0.6 m 안에 보이면 터널 미션이 받아 입구 가운데로 들어가고(10/28), 문턱을 지나 Pi 카메라가
+# 어두워지면 A* 로 출구까지, 나와서 밝아지면 끝난다 (dark_ratio / bright_ratio 는 현장에서).
 ros2 launch autorace_bringup race.launch.py missions:=tunnel auto_start:=true
 # 터널 시험 노드 (tunnel_test_mission, tunnel_lane 의 A* 판). 두 가지 쓰임:
 #  (a) 차선 주행 + 터널: lane_drive.launch.py 를 띄운 채, 앞 왼쪽에 정면 벽이 0.6 m 안에 보이면

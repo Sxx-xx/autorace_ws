@@ -23,8 +23,13 @@ at about 45 degrees. A few obstacles stand inside, wherever the organisers
 put them. There are no lines on its floor and no light, so the lane camera is
 of no use; the laser is what the robot has, and the walls are what it steers by.
 
-The lane follower drives the robot in. On the way the laser sees it pass
-between the two ends of the entry wall, 15 cm to either side, with walls all
+The lane follower drives the robot up to the tunnel. The entry wall, across
+the way ahead and running off to the left (the entrance is at its right end,
+where the robot comes in), is recognised by the laser from front_trigger
+metres: the mission asks the manager for the road (approach), and drives
+square to that wall through the middle of the entrance, which is
+opening_width / 2 to the right of the wall's end. On the way the laser sees
+it pass between the two ends of the entry wall, 15 cm to either side, with walls all
 round ahead of it, and the robot's place in the tunnel is taken from that
 scan: the wall ends say where it is, the walls which way it is heading (it
 may come in askew). From then on the odometry carries that place along. The
@@ -47,9 +52,12 @@ exit's right side), measured off the laser rather than the reckoning. It then
 drives out along that wall, and the mission is done when the camera brightens
 again, to twice the darkest it was over the last seconds.
 
-    drive   through the tunnel to the exit
-    align   turn parallel to the exit's right wall
-    leave   out along that wall, until it is light
+    approach  square to the entry wall, through the entrance's middle, until
+              the doorway has been passed and it is dark (approach_max metres
+              at most: then the mission is skipped and the lane follower goes on)
+    drive     through the tunnel to the exit
+    align     turn parallel to the exit's right wall
+    leave     out along that wall, until it is light
 """
 
 from collections import deque
@@ -162,6 +170,28 @@ class TunnelMission(Node):
         self.declare_parameter('side_gain', 3.0)
         self.declare_parameter('leave_distance', 1.0)
         self.declare_parameter('active_timeout', 1.0)
+        # The entry wall seen from outside: a straight run of returns across
+        # the way, from ahead-left (the entrance is at its right end), within
+        # front_wall_angle of square, at least front_wall_points returns over
+        # front_wall_span, inside front_wall_ahead x front_wall_left. Within
+        # front_trigger of it the mission asks for the road and drives square
+        # to it through the entrance's middle at approach_speed, aiming
+        # approach_beyond past the doorway; approach_max metres without the
+        # doorway and the dark, and the mission is skipped.
+        self.declare_parameter('front_wall_trigger', True)
+        self.declare_parameter('front_wall_ahead', 0.90)
+        self.declare_parameter('front_wall_left', 1.20)
+        self.declare_parameter('front_wall_points', 20)
+        self.declare_parameter('front_wall_span', 0.40)
+        self.declare_parameter('front_wall_angle', 0.50)
+        self.declare_parameter('front_trigger', 0.60)
+        self.declare_parameter('entry_scans', 2)
+        self.declare_parameter('approach_beyond', 0.30)
+        self.declare_parameter('approach_speed', 0.10)
+        self.declare_parameter('approach_max', 1.2)
+        self.declare_parameter('heading_gain', 2.0)
+        self.declare_parameter('stop_distance', 0.12)
+        self.declare_parameter('stop_half_width', 0.10)
 
         def value(name):
             return self.get_parameter(name).value
@@ -195,6 +225,20 @@ class TunnelMission(Node):
         self.side_gain = value('side_gain')
         self.leave_distance = value('leave_distance')
         self.active_timeout = value('active_timeout')
+        self.front_wall_trigger = value('front_wall_trigger')
+        self.front_wall_ahead = value('front_wall_ahead')
+        self.front_wall_left = value('front_wall_left')
+        self.front_wall_points = value('front_wall_points')
+        self.front_wall_span = value('front_wall_span')
+        self.front_wall_angle = value('front_wall_angle')
+        self.front_trigger = value('front_trigger')
+        self.entry_scans = value('entry_scans')
+        self.approach_beyond = value('approach_beyond')
+        self.approach_speed = value('approach_speed')
+        self.approach_max = value('approach_max')
+        self.heading_gain = value('heading_gain')
+        self.stop_distance = value('stop_distance')
+        self.stop_half_width = value('stop_half_width')
 
         # The grid covers the inside and a margin beyond the walls.
         self.margin = 0.3
@@ -219,6 +263,12 @@ class TunnelMission(Node):
         self.bright_count = 0
         self.light = False          # bright again, out of the tunnel
         self.announced = False      # the dark entrance logged
+        self.front = None           # the entry wall's latest fit (distance, angle, aim)
+        self.front_time = 0.0
+        self.front_count = 0        # scans in a row with it within front_trigger
+        self.approach_from = 0.0    # self.travelled when the approach began
+        self.approach_yaw = None    # heading to hold, square to the entry wall (odom)
+        self.approach_target = None  # the point past the entrance's middle (odom)
         self.align_start = 0.0
         self.square_count = 0
         self.leave_from = None
@@ -233,6 +283,9 @@ class TunnelMission(Node):
             Image, '/camera/image_raw', self.callback_image, qos_profile_sensor_data)
         self.pub_cmd_vel = self.create_publisher(Twist, '/cmd_vel/mission', 1)
         self.pub_done = self.create_publisher(Bool, '/autorace/mission/tunnel/done', 1)
+        # The approach found no tunnel: the manager goes back to lane following
+        # without counting the mission done.
+        self.pub_skipped = self.create_publisher(Bool, '/autorace/mission/tunnel/skipped', 1)
         self.pub_trigger = self.create_publisher(String, '/autorace/trigger', 5)
         # True while the robot's place in the tunnel is known from the doorway:
         # the construction mission must not take the tunnel's walls for blocks.
@@ -380,26 +433,39 @@ class TunnelMission(Node):
             self.active_time = self.now()
             if self.phase is None:
                 if self.pose is None or self.last_points is None:
-                    # Started some other way than by the dark doorway: with
-                    # no place in the tunnel, better the lane follower.
-                    self.get_logger().error(
-                        'Tunnel: activated without having passed the entrance, giving up.')
-                    self.phase = 'done'
+                    # Not through the doorway yet: up to it, square to the
+                    # entry wall if one is in view, straight on if not.
+                    self.phase = 'approach'
+                    self.approach_from = self.travelled
+                    self.approach_yaw = None if self.odom_pose is None else self.odom_pose[2]
+                    self.approach_target = None
+                    fresh = self.front is not None and self.now() - self.front_time < 1.0
+                    if fresh:
+                        self.aim(self.front)
+                    self.get_logger().info(
+                        'Tunnel: approaching %s at %.2f m/s.'
+                        % ('the entry wall %.2f m ahead, %+.0f deg off square'
+                           % (self.front[0], math.degrees(self.front[1])) if fresh
+                           else 'straight on (no entry wall in view)', self.approach_speed))
                     return
-                for _ in range(3):
-                    self.align(self.in_tunnel(self.last_points))
-                self.get_logger().info(
-                    'Tunnel: at (%.2f, %.2f), heading %.0f deg off the tunnel, driving through.'
-                    % (self.pose[0], self.pose[1], math.degrees(-self.pose[2])))
-                self.hits[:] = 0.0
-                self.path = None
-                self.light = False
-                self.phase = 'drive'
+                self.begin_drive()
         elif self.phase is not None:
             self.get_logger().info(f'Tunnel: deactivated during {self.phase}.')
             self.phase = None
             self.pose = None
             self.announced = False
+
+    def begin_drive(self):
+        """Through the doorway and dark: drive through the tunnel from the pose."""
+        for _ in range(3):
+            self.align(self.in_tunnel(self.last_points))
+        self.get_logger().info(
+            'Tunnel: at (%.2f, %.2f), heading %.0f deg off the tunnel, driving through.'
+            % (self.pose[0], self.pose[1], math.degrees(-self.pose[2])))
+        self.hits[:] = 0.0
+        self.path = None
+        self.light = False
+        self.phase = 'drive'
 
     def callback_odom(self, msg):
         position = msg.pose.pose.position
@@ -431,21 +497,26 @@ class TunnelMission(Node):
         while self.levels and now - self.levels[0][0] > self.light_window:
             self.levels.popleft()
 
-        if self.phase is None:
+        if self.phase is None or self.phase == 'approach':
             brightest = max(v for _, v in self.levels)
             self.dark_count = self.dark_count + 1 if level < self.dark_ratio * brightest else 0
             if self.dark_count < self.light_frames:
                 return
             if self.pose is None:
                 self.get_logger().warn(
-                    'Tunnel: dark (%.0f of %.0f) but no entrance seen, not starting.'
-                    % (level, brightest), throttle_duration_sec=2.0)
+                    'Tunnel: dark (%.0f of %.0f) but no entrance seen, %s.'
+                    % (level, brightest,
+                       'driving on' if self.phase == 'approach' else 'not starting'),
+                    throttle_duration_sec=2.0)
                 return
             if not self.announced:
                 self.announced = True
                 self.get_logger().info(
                     'Tunnel: dark (%.0f of %.0f) past the entrance, entering.'
                     % (level, brightest))
+            if self.phase == 'approach':
+                self.begin_drive()
+                return
             # The manager takes this only while lane following, and once.
             self.pub_trigger.publish(String(data='tunnel'))
         elif self.phase == 'leave':
@@ -468,9 +539,24 @@ class TunnelMission(Node):
                            ranges[seen] * np.sin(angles[seen])], axis=1)
         self.last_points = points
 
-        if self.phase is None:
+        if self.phase is None or self.phase == 'approach':
             self.watch_doorway(points, ranges, angles, seen)
-            self.pub_doorway.publish(Bool(data=self.pose is not None))
+            front = self.front_wall_fit(points)
+            if front is not None:
+                self.front, self.front_time = front, self.now()
+            if self.phase is None:
+                self.pub_doorway.publish(Bool(data=self.pose is not None))
+                near = front is not None and front[0] < self.front_trigger
+                self.front_count = self.front_count + 1 if near else 0
+                if self.front_wall_trigger and self.front_count >= self.entry_scans:
+                    if self.front_count == self.entry_scans:
+                        self.get_logger().info(
+                            'Tunnel: entry wall %.2f m ahead, %+.0f deg off square; asking for the road.'
+                            % (front[0], math.degrees(front[1])))
+                    # The manager takes this only while lane following, and once.
+                    self.pub_trigger.publish(String(data='tunnel'))
+            elif front is not None:
+                self.aim(front)     # while the wall is in view; then what it last said
             return
         if self.phase not in ('drive', 'align'):
             return
@@ -527,6 +613,76 @@ class TunnelMission(Node):
             self.announced = False
 
     # --- driving ---------------------------------------------------------
+
+    def front_wall_fit(self, points):
+        """The entry wall across the way ahead, running off to the left, as
+        (distance ahead, angle off square (rad, +: turn left to face it
+        square), aim): aim is the point approach_beyond past the middle of the
+        entrance at the wall's right end, square to the wall, in the robot's
+        frame. None if no such wall is there."""
+        p = points
+        band = p[(p[:, 0] > 0.05) & (p[:, 0] < self.front_wall_ahead)
+                 & (p[:, 1] > 0.0) & (p[:, 1] < self.front_wall_left)]
+        if len(band) < self.front_wall_points:
+            return None
+        vx, vy, x0, y0 = cv2.fitLine(band.astype(np.float32), cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
+        if vy < 0:
+            vx, vy = -vx, -vy            # along the wall, to the left
+        along = (band[:, 0] - x0) * vx + (band[:, 1] - y0) * vy
+        across = np.abs(-(band[:, 0] - x0) * vy + (band[:, 1] - y0) * vx)
+        off = math.atan2(-vx, vy)       # the wall's normal (ahead) against the heading
+        if (abs(off) > self.front_wall_angle or np.ptp(along) < self.front_wall_span
+                or np.median(across) > 0.02):
+            return None
+        normal = np.array([vy, -vx])     # square to the wall, away from the robot
+        distance = float(abs(np.dot(np.array([x0, y0]), normal)))
+        # The wall's right end: the fit is from the left half, but the end
+        # may lie right of the robot's centre line (the robot a little left
+        # of the entrance): every return on the line counts for it.
+        on_line = p[(p[:, 0] > 0.05) & (p[:, 0] < self.front_wall_ahead + 0.2) & (p[:, 1] > -0.6)
+                    & (np.abs(-(p[:, 0] - x0) * vy + (p[:, 1] - y0) * vx) < 0.03)]
+        # Rightwards from the fitted stretch, return by return, up to the
+        # first gap: the entrance (the corner beyond it is on the line too).
+        positions = np.sort((on_line[:, 0] - x0) * vx + (on_line[:, 1] - y0) * vy)
+        first = along.min()
+        for position in positions[positions < first][::-1]:
+            if first - position > 0.08:
+                break
+            first = position
+        end = np.array([x0, y0]) + np.array([vx, vy]) * first   # the wall's right end
+        middle = end - np.array([vx, vy]) * (self.opening / 2.0)
+        return distance, float(off), middle + normal * self.approach_beyond
+
+    def aim(self, front):
+        """Square to the entry wall, for the entrance's middle (odometry frame)."""
+        if self.odom_pose is None:
+            return
+        _, off, aim = front
+        xo, yo, ao = self.odom_pose
+        c, s = math.cos(ao), math.sin(ao)
+        self.approach_yaw = wrap(ao + off)
+        self.approach_target = (xo + c * aim[0] - s * aim[1], yo + s * aim[0] + c * aim[1])
+
+    def something_ahead(self):
+        p = self.last_points
+        return p is not None and bool(np.any(
+            (p[:, 0] > 0.0) & (p[:, 0] < self.stop_distance) & (np.abs(p[:, 1]) < self.stop_half_width)))
+
+    def through(self):
+        """For approach_target (the entrance's middle, past it), then on square to its wall."""
+        twist = Twist()
+        if self.odom_pose is None:
+            return twist
+        twist.linear.x = 0.0 if self.something_ahead() else self.approach_speed
+        xo, yo, ao = self.odom_pose
+        heading = ao if self.approach_yaw is None else self.approach_yaw
+        if self.approach_target is not None:
+            dx, dy = self.approach_target[0] - xo, self.approach_target[1] - yo
+            if math.cos(ao) * dx + math.sin(ao) * dy > 0.10:
+                heading = math.atan2(dy, dx)      # for the aim; square to the wall past it
+        steer = self.heading_gain * wrap(heading - ao)
+        twist.angular.z = max(-self.max_angular, min(self.max_angular, steer))
+        return twist
 
     def steer_to(self, target):
         """Drive the arc through a point given in the tunnel frame."""
@@ -595,6 +751,18 @@ class TunnelMission(Node):
             return
         if self.phase == 'done':
             self.pub_done.publish(Bool(data=True))
+            return
+        if self.phase == 'skipped':
+            self.pub_skipped.publish(Bool(data=True))
+            return
+        if self.phase == 'approach':
+            if self.travelled - self.approach_from > self.approach_max:
+                self.get_logger().warn(
+                    'Tunnel: %.1f m on and no doorway in the dark; not the tunnel, handing back.'
+                    % self.approach_max)
+                self.phase = 'skipped'
+                return
+            self.pub_cmd_vel.publish(self.through())
             return
         if self.pose is None:
             return
