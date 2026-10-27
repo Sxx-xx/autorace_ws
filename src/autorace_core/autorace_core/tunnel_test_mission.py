@@ -23,8 +23,17 @@ entrance's middle (1.8, 1.8 m: 45 degrees, 2.5 m). Where the entrance is:
 
   start_on: run_active  the robot is put with its axle in the doorway, pointing
                         in, and where it stands at the start is the entrance.
-  start_on: tunnel      the robot is driven in (approach_speed straight on, or
-                        by hand / teleop with approach_speed 0), and it is in
+  start_on: tunnel      the lane follower drives the robot up to the tunnel.
+                        The tunnel's front wall, across the way ahead and to
+                        the left (the entrance is at its right end, straight on
+                        along the lane), within front_trigger ahead hands the
+                        driving to this node, which goes in square to that
+                        wall through the middle of the entrance (aiming
+                        approach_beyond past the doorway's middle, opening_half
+                        right of the wall's end) at approach_speed, holding
+                        that direction once the wall is out of view; with
+                        front_wall_trigger false it goes straight on at once,
+                        or with approach_speed 0 too it is driven in by hand. It is in
                         the tunnel when the forward camera is dark (mean
                         brightness at most dark_threshold) and a wall runs
                         along its right (the tunnel's entrance is 0.18 m from
@@ -56,7 +65,9 @@ to cmd_vel_topic: /cmd_vel (no mux, the test on its own) or /cmd_vel/mission
 estop.py stops this node with the missions.
 
     wait    until /autorace/run_active is true
-    armed   (start_on: tunnel) on the way in, until dark and a wall on the right
+    armed   (start_on: tunnel) the lane follower drives; until the front wall, ahead left
+    approach square to it through the entrance, until dark and a wall on the right (or
+            `no entry` after approach_max m: it stops there)
     line    along the route
     detour  round an obstacle on the route, back onto it (`blocked` when no way is
             found: it waits and looks again)
@@ -121,7 +132,23 @@ class TunnelTestMission(Node):
         self.declare_parameter('right_wall_max_angle', 0.5)  # rad off the heading
         self.declare_parameter('entry_scans', 2)
         self.declare_parameter('entrance_right', 0.18)   # the entrance's middle from the right wall
-        self.declare_parameter('approach_speed', 0.0)    # m/s straight on while armed (0: driven in)
+        # The approach: the front wall, a straight wall across the way (square to the heading
+        # within front_wall_angle), between front_wall_left of it and front_wall_ahead ahead,
+        # at least front_wall_points returns over front_wall_span, within front_trigger ahead,
+        # on entry_scans scans running. The entrance is at its right end, opening_half wide
+        # to either side of its middle.
+        self.declare_parameter('front_wall_trigger', True)
+        self.declare_parameter('front_wall_ahead', 0.90)
+        self.declare_parameter('front_wall_left', 1.20)
+        self.declare_parameter('front_wall_points', 20)
+        self.declare_parameter('front_wall_span', 0.40)
+        self.declare_parameter('front_wall_angle', 0.50)   # rad off square
+        self.declare_parameter('front_trigger', 0.60)      # m ahead
+        self.declare_parameter('opening_half', 0.17)
+        self.declare_parameter('approach_beyond', 0.30)    # m past the doorway to aim at
+        self.declare_parameter('approach_speed', 0.10)   # m/s straight on into the tunnel
+        self.declare_parameter('approach_max', 1.2)      # m: no tunnel by then, stop
+        self.declare_parameter('heading_gain', 2.0)      # rad/s per rad off the held direction
         # /cmd_vel on its own; /cmd_vel/mission under cmd_vel_mux with the lane controller.
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
         # The exit (see the module's notes): facing out is this heading from the entrance's.
@@ -177,6 +204,17 @@ class TunnelTestMission(Node):
         self.entry_scans = value('entry_scans')
         self.entrance_right = value('entrance_right')
         self.approach_speed = value('approach_speed')
+        self.front_wall_trigger = value('front_wall_trigger')
+        self.front_wall_ahead = value('front_wall_ahead')
+        self.front_wall_left = value('front_wall_left')
+        self.front_wall_points = value('front_wall_points')
+        self.front_wall_span = value('front_wall_span')
+        self.front_wall_angle = value('front_wall_angle')
+        self.front_trigger = value('front_trigger')
+        self.opening_half = value('opening_half')
+        self.approach_beyond = value('approach_beyond')
+        self.approach_max = value('approach_max')
+        self.heading_gain = value('heading_gain')
         self.exit_heading = value('exit_heading')
         self.align_rate = value('align_rate')
         self.align_tolerance = value('align_tolerance')
@@ -223,6 +261,10 @@ class TunnelTestMission(Node):
         self.planned_time = -math.inf
         self.brightness = None         # the forward camera's mean grey
         self.scan_time = None          # when the last scan came
+        self.front_count = 0
+        self.approach_from = None      # odometry (x, y) where the approach began
+        self.approach_yaw = None       # odometry heading to hold: square to the front wall
+        self.approach_target = None    # odometry (x, y) past the doorway's middle
         self.phase_since = 0.0         # when align or leave began
         self.aligned_count = 0
         self.leave_from = None         # where leave began (start frame)
@@ -261,7 +303,7 @@ class TunnelTestMission(Node):
             self.hits[:] = 0.0
             self.start = self.pose = None
             if self.start_on == 'tunnel':
-                self.entry_count = 0
+                self.entry_count = self.front_count = 0
                 self.state = 'armed'
                 self.get_logger().info('Tunnel test: armed, watching for the tunnel.')
             else:
@@ -284,7 +326,7 @@ class TunnelTestMission(Node):
         seen = np.isfinite(ranges) & (ranges > msg.range_min + 1e-3) & (ranges < self.max_range)
         self.points = np.stack([self.lidar_offset + ranges[seen] * np.cos(angles[seen]),
                                 ranges[seen] * np.sin(angles[seen])], axis=1)
-        if self.state == 'armed':
+        if self.state in ('armed', 'approach'):
             self.watch_entry()
             return
         if self.pose is None or self.state in ('wait', 'done'):
@@ -322,10 +364,39 @@ class TunnelTestMission(Node):
         """The wall along the right as (distance, angle, first): its distance from the axle, its
         direction against the heading (rad, + to the left) and how far along it, from the axle,
         its first return lies (- behind). None if no straight wall is there."""
-        near, far, behind, ahead = self.right_wall
+        return self.wall_fit(-1.0, self.right_wall, self.right_wall_points, self.right_wall_span)
+
+    def front_wall_fit(self):
+        """The front wall across the way ahead, to the left, as (distance ahead, angle off square
+        (rad, + : the robot should turn left to face it square), aim): aim is the point
+        approach_beyond past the middle of the entrance at the wall's right end, square to the
+        wall, in the robot's frame. None if no such wall is there."""
         p = self.points
-        band = p[(p[:, 1] < -near) & (p[:, 1] > -far) & (p[:, 0] > -behind) & (p[:, 0] < ahead)]
-        if len(band) < self.right_wall_points:
+        band = p[(p[:, 0] > 0.05) & (p[:, 0] < self.front_wall_ahead)
+                 & (p[:, 1] > 0.0) & (p[:, 1] < self.front_wall_left)]
+        if len(band) < self.front_wall_points:
+            return None
+        vx, vy, x0, y0 = cv2.fitLine(band.astype(np.float32), cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
+        if vy < 0:
+            vx, vy = -vx, -vy            # along the wall, to the left
+        along = (band[:, 0] - x0) * vx + (band[:, 1] - y0) * vy
+        across = np.abs(-(band[:, 0] - x0) * vy + (band[:, 1] - y0) * vx)
+        off = math.atan2(-vx, vy)       # the wall's normal (ahead) against the heading
+        if (abs(off) > self.front_wall_angle or np.ptp(along) < self.front_wall_span
+                or np.median(across) > 0.02):
+            return None
+        normal = np.array([vy, -vx])     # square to the wall, away from the robot
+        distance = float(abs(np.dot(np.array([x0, y0]), normal)))
+        end = np.array([x0, y0]) + np.array([vx, vy]) * along.min()   # the wall's right end
+        middle = end - np.array([vx, vy]) * self.opening_half
+        return distance, off, middle + normal * self.approach_beyond
+
+    def wall_fit(self, side, limits, min_points, min_span):
+        near, far, behind, ahead = limits
+        p = self.points
+        y = side * p[:, 1]
+        band = p[(y > near) & (y < far) & (p[:, 0] > -behind) & (p[:, 0] < ahead)]
+        if len(band) < min_points:
             return None
         vx, vy, x0, y0 = cv2.fitLine(band.astype(np.float32), cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
         if vx < 0:
@@ -333,7 +404,7 @@ class TunnelTestMission(Node):
         angle = math.atan2(vy, vx)
         along = (band[:, 0] - x0) * vx + (band[:, 1] - y0) * vy
         across = np.abs(-(band[:, 0] - x0) * vy + (band[:, 1] - y0) * vx)
-        if (abs(angle) > self.right_wall_max_angle or np.ptp(along) < self.right_wall_span
+        if (abs(angle) > self.right_wall_max_angle or np.ptp(along) < min_span
                 or np.median(across) > 0.02):
             return None
         distance = abs(-(0.0 - x0) * vy + (0.0 - y0) * vx)
@@ -343,11 +414,23 @@ class TunnelTestMission(Node):
     def watch_entry(self):
         dark = self.brightness is not None and self.brightness <= self.dark_threshold
         wall = self.right_wall_fit()
+        front = self.front_wall_fit()
+        show = lambda w: 'none' if w is None else '%.2f m, %+.0f deg' % (w[0], math.degrees(w[1]))
         self.get_logger().info(
-            'Tunnel test: armed: brightness %s (dark at %.0f), right wall %s'
-            % ('none' if self.brightness is None else '%.0f' % self.brightness, self.dark_threshold,
-               'none' if wall is None else '%.2f m, %+.0f deg' % (wall[0], math.degrees(wall[1]))),
+            'Tunnel test: %s: brightness %s (dark at %.0f), front wall %s, right wall %s'
+            % (self.state, 'none' if self.brightness is None else '%.0f' % self.brightness,
+               self.dark_threshold, show(front), show(wall)),
             throttle_duration_sec=1.0)
+        if self.state == 'armed' and self.odom is not None:
+            near = front is not None and front[0] < self.front_trigger
+            self.front_count = self.front_count + 1 if near else 0
+            if self.front_count >= self.entry_scans and self.front_wall_trigger:
+                self.start_approach(front, 'front wall %.2f m ahead, %+.0f deg off square'
+                                    % (front[0], math.degrees(front[1])))
+            elif not self.front_wall_trigger and self.approach_speed > 0.0:
+                self.start_approach(None, 'straight on')
+        elif self.state == 'approach' and front is not None and self.odom is not None:
+            self.aim(front)      # while the wall is in view; then what it last said
         self.entry_count = self.entry_count + 1 if dark and wall is not None else 0
         if self.entry_count < self.entry_scans or self.odom is None:
             return
@@ -364,6 +447,46 @@ class TunnelTestMission(Node):
         self.pub_cmd_vel.publish(Twist())
         self.begin(start, 'in the tunnel (dark, right wall %.2f m, %+.0f deg): %.2f m in, '
                           '%+.2f m off the middle' % (distance, math.degrees(angle), xt, yt))
+
+    def start_approach(self, front, why):
+        self.state = 'approach'
+        self.approach_from = np.array(self.odom[:2])
+        self.approach_yaw, self.approach_target = self.odom[2], None
+        if front is not None:
+            self.aim(front)
+        self.get_logger().info(
+            f'Tunnel test: {why}; into the tunnel at {self.approach_speed:.2f} m/s.')
+
+    def aim(self, front):
+        """Square to the front wall, for the entrance's middle (odometry frame)."""
+        _, off, aim = front
+        xo, yo, ao = self.odom
+        c, s = math.cos(ao), math.sin(ao)
+        self.approach_yaw = wrap(ao + off)
+        self.approach_target = np.array([xo + c * aim[0] - s * aim[1], yo + s * aim[0] + c * aim[1]])
+
+    def approach(self):
+        """Through the entrance's middle, square to the front wall."""
+        if self.odom is None:
+            return
+        gone = float(np.linalg.norm(np.array(self.odom[:2]) - self.approach_from))
+        if gone > self.approach_max:
+            self.pub_cmd_vel.publish(Twist())
+            self.get_logger().warn(
+                f'Tunnel test: no entry: {gone:.2f} m on and not dark with a wall on the right '
+                '(dark_threshold?); holding.', throttle_duration_sec=2.0)
+            return
+        twist = Twist()
+        twist.linear.x = 0.0 if self.something_ahead() else self.approach_speed
+        xo, yo, ao = self.odom
+        heading = self.approach_yaw
+        if self.approach_target is not None:
+            dx, dy = self.approach_target[0] - xo, self.approach_target[1] - yo
+            if math.cos(ao) * dx + math.sin(ao) * dy > 0.10:
+                heading = math.atan2(dy, dx)      # for the aim; square to the wall past it
+        steer = self.heading_gain * wrap(heading - ao)
+        twist.angular.z = max(-self.max_angular, min(self.max_angular, steer))
+        self.pub_cmd_vel.publish(twist)
 
     def callback_odom_pose(self):
         if self.start is None or self.odom is None:
@@ -491,10 +614,9 @@ class TunnelTestMission(Node):
             self.get_logger().warn('Tunnel test: no /scan for over a second.',
                                    throttle_duration_sec=2.0)
         if self.state == 'armed':
-            if self.approach_speed > 0.0:
-                twist = Twist()
-                twist.linear.x = 0.0 if self.something_ahead() else self.approach_speed
-                self.pub_cmd_vel.publish(twist)
+            return                   # the lane follower (or a hand) drives
+        if self.state == 'approach':
+            self.approach()
             return
         if self.state in ('wait', 'done') or self.pose is None or self.clearance is None:
             return

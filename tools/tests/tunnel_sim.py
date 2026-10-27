@@ -8,8 +8,10 @@ where a scenario puts them. The laser is cast against the walls and the obstacle
 1 cm noise); the node's Twist moves the robot. Reports whether it reached the goal, how long it took,
 how far it drove against the straight line, and how close the axle came to anything.
   python3 tools/tests/tunnel_sim.py [scenario ...] [--png DIR]      scenarios: see SCENARIOS
-Scenarios named enter_* start outside, askew, with start_on: tunnel: the robot drives in at
-approach_speed and the camera goes dark once it is under the roof (5 cm ahead of the axle).
+Scenarios named enter_* start outside, askew, with start_on: tunnel: a stand-in for the lane
+follower drives the robot (0.12 m/s, back to the lane's middle) up to the tunnel's front wall,
+which hands it to the node; the camera goes dark once it is under the roof (5 cm ahead of the
+axle). enter_askew: the lane runs 6 cm left of the entrance's middle and 7 deg off square.
 """
 import math
 import sys
@@ -28,7 +30,8 @@ from autorace_core.tunnel_test_mission import TunnelTestMission
 RIGHT, OPEN, BOX = 0.18, 0.34, 0.15
 GOAL = (1.8, 1.8)                  # set from the node in main()
 START = (0.0, 0.0, 0.0)           # the axle in the doorway, pointing in (the goal is from here)
-OUTSIDE = (-0.35, 0.03, 0.06)     # enter_*: 35 cm short of the doorway, 3 cm left, 3.4 deg askew
+OUTSIDE = (-0.90, 0.03, 0.06)     # enter_*: 90 cm short of the doorway, 3 cm left, 3.4 deg askew
+LANES = {'enter_askew': (0.06, 0.12)}   # the lane: y at the doorway, angle off square (rad)
 SCENARIOS = {
     'empty': [],
     # Shares of the way along the diagonal (scaled to the goal in main()).
@@ -39,6 +42,7 @@ SCENARIOS = {
     'near_goal': [(0.80, 0.80)],
     'enter_empty': [],
     'enter_middle': [(0.50, 0.50)],
+    'enter_askew': [],
 }
 
 
@@ -90,6 +94,7 @@ def distance_to(segs, x, y):
 
 def run(node, name, boxes, png_dir=None):
     segs = segments(boxes)
+    lane_y, lane_a = LANES.get(name, (0.0, 0.0))
     obstacles = segments(boxes)[len(walls()):] if boxes else None
     cmd = [0.0, 0.0]
     node.pub_cmd_vel.publish = lambda m: cmd.__setitem__(slice(0, 2), [m.linear.x, m.angular.z])
@@ -124,6 +129,10 @@ def run(node, name, boxes, png_dir=None):
         now = time.monotonic()
         dt = now - prev; prev = now
         v, w = cmd
+        if node.state == 'armed':
+            # The lane follower's stand-in: on along the lane (y = 0), back to its middle.
+            off = (y - lane_y - math.tan(lane_a) * x) * math.cos(lane_a)
+            v, w = 0.12, -3.0 * off - 1.5 * math.atan2(math.sin(yaw - lane_a), math.cos(yaw - lane_a))
         x += v * math.cos(yaw) * dt; y += v * math.sin(yaw) * dt; yaw += w * dt
         odom()
         if now - last_scan >= 1 / 8:
@@ -173,7 +182,7 @@ def main():
     probe = TunnelTestMission(); GOAL = tuple(probe.goal); probe.destroy_node()
     results = []
     for name in names:
-        overrides = [Parameter('start_on', value='tunnel'), Parameter('approach_speed', value=0.10)]
+        overrides = [Parameter('start_on', value='tunnel')]
         node = TunnelTestMission(parameter_overrides=overrides if name.startswith('enter') else [])
         results.append(run(node, name, SCENARIOS[name], png_dir))
         node.destroy_node()

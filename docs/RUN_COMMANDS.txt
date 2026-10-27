@@ -147,8 +147,11 @@ python3 tools/estop.py
 # [노트북 터미널 2] 차선 주행만 (race 보다 가볍다: 표지판·신호등 검출 없음)
 ros2 launch autorace_bringup lane_drive.launch.py camera_topic:=/camera/image_raw \
   camera_info_topic:=/camera/camera_info lane_stats:=true extra_params:=$(pwd)/tools/drive_test_picam.yaml
-# [노트북 터미널 3] 터널 (A*): 차선 주행이 몰고 들어가고, 어두움 + 오른쪽 벽이면 넘겨받아
+# [노트북 터미널 3] 터널 (A*): 차선 주행이 터널 앞까지 몰고 간다. 앞 왼쪽에 진행 방향과 수직인
+#   정면 벽(입구는 그 오른쪽 끝, 차선과 일직선)이 0.6 m 안에 보이면 넘겨받아 그 벽에 수직으로
+#   입구 가운데를 지나 직진, 오른쪽 벽 + 어두움(dark_threshold 이하)이면 터널 미션 시작:
 #   대각선 끝(1.8, 1.8 m)까지, 오른쪽 벽과 평행으로 돌아 나와서 다시 차선 주행에 넘긴다.
+#   1.2 m 들어가도 어두워지지 않으면 멈추고 'no entry' 경고 (dark_threshold 를 로그의 brightness 로 맞출 것)
 ros2 run autorace_core tunnel_test_mission --ros-args -p start_on:=tunnel -p cmd_vel_topic:=/cmd_vel/mission
 #   터널만 (차선 주행 없이, 바퀴 축을 입구 면에 두고):  ros2 run autorace_core tunnel_test_mission
 #   어두움 기준: 대기 중 로그 'armed: brightness ..' 를 보고 -p dark_threshold:=.. (기본 40), 밝음 80
