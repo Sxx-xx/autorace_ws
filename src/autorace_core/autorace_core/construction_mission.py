@@ -339,6 +339,8 @@ class ConstructionMission(Node):
 
         self.phase = None           # None while the mission is not running
         self.active_time = 0.0
+        self.skipped = False        # ended with no obstacle met: not completed
+        self.doorway = False        # the tunnel node has seen its doorway
         # Odometry of the last few seconds, to find where the robot was when
         # a scan or a picture was taken: (time, x, y, yaw, distance travelled).
         self.odometry = deque(maxlen=400)
@@ -378,9 +380,19 @@ class ConstructionMission(Node):
                 PointCloud2, f'/detect/lane_lines/{colour}',
                 lambda msg, key=colour: self.callback_lines(msg, key), 1)
         self.create_subscription(PointStamped, '/detect/lane_target', self.callback_lane, 1)
+        # The tunnel: its walls armed this mission and were taken for blocks
+        # (2026-10-27 23:38). While the tunnel node knows its doorway nothing
+        # arms or takes over here, and its trigger during the approach hands
+        # the road back to it.
+        self.create_subscription(Bool, '/autorace/tunnel/doorway', self.callback_doorway, 1)
+        self.create_subscription(String, '/autorace/trigger', self.callback_trigger, 5)
         self.pub_cmd_vel = self.create_publisher(Twist, '/cmd_vel/mission', 1)
         self.pub_done = self.create_publisher(
             Bool, '/autorace/mission/construction/done', 1)
+        # Ended with no obstacle met (armed in vain, or the tunnel was here):
+        # the manager goes back to lane following without counting it done.
+        self.pub_skipped = self.create_publisher(
+            Bool, '/autorace/mission/construction/skipped', 1)
         self.pub_trigger = self.create_publisher(String, '/autorace/trigger', 5)
         self.pub_image = self.create_publisher(Image, '/detect/image_construction', 1)
         self.pub_map = self.create_publisher(OccupancyGrid, '/detect/construction_map', 1)
@@ -397,6 +409,7 @@ class ConstructionMission(Node):
             self.active_time = self.now()
             if self.phase is None and self.odometry:
                 self.get_logger().info('Construction: watching for obstacles.')
+                self.skipped = False
                 self.phase = 'approach'
                 self.started_at = self.odometry[-1][4]
                 self.cleared_at = None
@@ -462,6 +475,10 @@ class ConstructionMission(Node):
         ahead = self.in_the_way_of(points)
         needed = self.armed_points if self.phase == 'approach' else self.takeover_points
         self.in_the_way = self.in_the_way + 1 if np.count_nonzero(ahead) >= needed else 0
+        if self.doorway and self.phase in (None, 'approach'):
+            # The tunnel's walls, not blocks.
+            self.in_the_way = 0
+            self.arm_count = 0
 
         if self.phase is None:
             wide = ((points[:, 0] > self.arm_min_ahead) & (points[:, 0] < self.arm_max_ahead)
@@ -807,6 +824,15 @@ class ConstructionMission(Node):
         self.get_logger().info(f'Construction: {reason} during {self.phase}.')
         self.phase = None
 
+    def callback_doorway(self, msg):
+        self.doorway = msg.data
+
+    def callback_trigger(self, msg):
+        if msg.data == 'tunnel' and self.phase == 'approach':
+            self.get_logger().warn('Construction: the tunnel is here, handing back.')
+            self.skipped = True
+            self.phase = 'done'
+
     def update(self):
         if self.phase is None or not self.odometry or self.hits_origin is None:
             return
@@ -816,7 +842,7 @@ class ConstructionMission(Node):
             return
         if self.phase == 'done':
             # Repeated until the manager takes the activation away.
-            self.pub_done.publish(Bool(data=True))
+            (self.pub_skipped if self.skipped else self.pub_done).publish(Bool(data=True))
             return
 
         _, x, y, yaw, travelled = self.odometry[-1]
@@ -831,7 +857,8 @@ class ConstructionMission(Node):
                 self.met = False
                 self.takeover_at = travelled
             elif travelled - self.started_at > self.approach_limit:
-                self.get_logger().warn('Construction: no obstacle met, done.')
+                self.get_logger().warn('Construction: no obstacle met, handing back.')
+                self.skipped = True
                 self.phase = 'done'
             if self.phase != 'avoid':
                 return

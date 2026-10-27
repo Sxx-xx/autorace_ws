@@ -288,6 +288,15 @@ roi_top 같은 비율 값은 그대로. **아직 주행으로 확인하지 않�
       (bag 에 camera_info 가 없어 C920 기본 내부값을 넘김): 주차장 구간 10 s 에서 노란선 2.5 cm 안의 흰 점
       프레임 평균 212 → 0, 흰 점 594 → 369, 노란 점 991 → 1231; 도로 구간 10 s 에서 70 → 9, 흰 점
       429 → 356, 노란 점 1696 → 1777. 진짜 흰 선은 노란선에서 33 cm 떨어져 있어 안 닿는다.
+  (14) 터널 시험 (23:38 bag, 수동 출발): 터널 입구 벽을 라이다가 보고 공사 미션이 먼저 arm (27.1 s) → 터널
+      노드가 문턱 + 어두움으로 trigger 를 냈지만(28.6 s) 매니저가 공사 중이라 무시 → 공사 미션이 입구 벽을
+      장애물 1 로 세고 지나가 "1 of 3 passed, done" → after_mission 으로 주차가 켜짐. 터널은 한 번도 안 돎.
+      고침: 터널 노드가 문턱을 본 동안 /autorace/tunnel/doorway true 를 내고, 공사 미션은 그동안 arm·
+      takeover 를 안 함; 공사가 approach 중에 'tunnel' trigger 를 보면 "the tunnel is here, handing back"
+      으로 끝냄. 아무것도 안 한 채 끝나는 공사(헛 arm, 터널)는 done 대신 /autorace/mission/construction/
+      skipped 를 내고, 매니저는 그걸 완료로 안 세고 after_mission(주차)도 안 붙인 채 차선 주행으로 돌아감.
+      bag 재생(센서만 틀고 매니저·공사·터널·주차 노드를 살려서): 공사 arm → 1.7 s 뒤 handing back →
+      LANE_DRIVE → 0.1 s 뒤 터널 진입 "(−0.22, −0.01), −8°". 실물에서 터널 안 주행은 아직 못 봄.
   (4) 빈 주행의 커브에서 덜 돌고 나와 좌우로 흔들림. 명령 각속도가 cornering_rate 0.6 에 걸려
       있고 실제도 0.52~0.58 로 따라오므로, 로봇이 못 도는 게 아니라 한도가 낮은 것. →
       cornering_rate 0.6 → 0.8 (perception_real.yaml). 흔들림(슬라럼)은 커브 끝의 경로/카메라

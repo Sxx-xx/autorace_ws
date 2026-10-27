@@ -234,6 +234,9 @@ class TunnelMission(Node):
         self.pub_cmd_vel = self.create_publisher(Twist, '/cmd_vel/mission', 1)
         self.pub_done = self.create_publisher(Bool, '/autorace/mission/tunnel/done', 1)
         self.pub_trigger = self.create_publisher(String, '/autorace/trigger', 5)
+        # True while the robot's place in the tunnel is known from the doorway:
+        # the construction mission must not take the tunnel's walls for blocks.
+        self.pub_doorway = self.create_publisher(Bool, '/autorace/tunnel/doorway', 1)
 
         self.create_timer(0.1, self.update)
 
@@ -467,6 +470,7 @@ class TunnelMission(Node):
 
         if self.phase is None:
             self.watch_doorway(points, ranges, angles, seen)
+            self.pub_doorway.publish(Bool(data=self.pose is not None))
             return
         if self.phase not in ('drive', 'align'):
             return

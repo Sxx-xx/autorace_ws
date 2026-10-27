@@ -147,6 +147,15 @@ class MissionManager(Node):
                 lambda msg, key=name: self.callback_done(msg, key),
                 1
             )
+            # Ended with nothing done (the construction mission armed in vain,
+            # or at the tunnel's walls): back to lane following, not counted
+            # as completed, no follow-up mission.
+            self.create_subscription(
+                Bool,
+                f'/autorace/mission/{name}/skipped',
+                lambda msg, key=name: self.callback_skipped(msg, key),
+                1
+            )
 
         if self.get_parameter('auto_start').value:
             self.get_logger().warn('auto_start is set, skipping the traffic light.')
@@ -194,6 +203,18 @@ class MissionManager(Node):
             return
         self.get_logger().info(f'Mission {mission} reported done.')
         self.finish_mission(mission)
+
+    def callback_skipped(self, msg, mission):
+        if not msg.data or self.state != MISSIONS.get(mission):
+            return
+        self.get_logger().warn(f'Mission {mission} ended with nothing done; back to the lane.')
+        self.set_mission_active(mission, False)
+        self.transition(MissionState.LANE_DRIVE, f'{mission} skipped')
+        if self.pending is not None:
+            next_mission, reason, when = self.pending
+            self.pending = None
+            if self.now() - when < self.sign_memory:
+                self.request_mission(next_mission, f'{reason} (seen during {mission})')
 
     # --- state machine ---------------------------------------------------
 
