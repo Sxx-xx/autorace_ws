@@ -237,11 +237,18 @@ detect_traffic_light:
       value_l: 200
     red:
       hue_margin: 10
+    # The green lamp (a phone showing a traffic light) comes out yellow-green
+    # on the Pi camera: hue 36-38 at its centre, 29-38 over the lamp, lower
+    # still in some frames (2026-10-27 22:35 bag), so it was read as yellow
+    # (20-38). Over that bag's 120 lamp frames: boundary 31/32 gave green 83,
+    # yellow 23; 27/28 gave green 103, yellow 2. The yellow lamp has not been
+    # measured: if it is read as green, lower both bounds together (an amber
+    # lamp is usually near hue 15-22).
     yellow:
-      hue_l: 20
-      hue_h: 38
+      hue_l: 10
+      hue_h: 27
     green:
-      hue_l: 45
+      hue_l: 28
       hue_h: 95
     min_area: 120         # at 640x480 (30 at 320x240)
     housing:
