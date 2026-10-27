@@ -190,6 +190,17 @@ class LaneController(Node):
         # missing. On the robot the steering curvature stayed over curve_exit after a bend
         # (2-3 cm off the middle is enough), so it never sped up again (2026-10-25).
         self.declare_parameter('curve_source', 'steering')
+        # Slow down before the bend is called (two-speed mode only): from max_speed with the
+        # target pre_slow_start (rad) off the heading down to curve_speed at pre_slow_full.
+        # The Pi camera sees a corner 0.39 m ahead at most and the robot does not stop at
+        # once: called at the bend, it went deep into it and turned on the spot (2026-10-27).
+        # 0 for pre_slow_full leaves it off.
+        self.declare_parameter('pre_slow_start', 0.12)
+        self.declare_parameter('pre_slow_full', 0.0)
+        # Steer harder by exit_boost (0.3 = 30 %) for exit_boost_time s once a bend is over,
+        # back to the middle sooner: out of a bend the robot ran on the outer line for seconds.
+        self.declare_parameter('exit_boost', 0.0)
+        self.declare_parameter('exit_boost_time', 1.0)
         self.declare_parameter('lane_timeout', 0.5)
         self.declare_parameter('recovery_speed', 0.05)
         self.declare_parameter('recovery_angular', 0.45)
@@ -271,6 +282,10 @@ class LaneController(Node):
         self.curve_exit = self.get_parameter('curve_exit_curvature').value
         self.curve_exit_delay = self.get_parameter('curve_exit_delay').value
         self.curve_source = self.get_parameter('curve_source').value
+        self.pre_slow_start = self.get_parameter('pre_slow_start').value
+        self.pre_slow_full = self.get_parameter('pre_slow_full').value
+        self.exit_boost = self.get_parameter('exit_boost').value
+        self.exit_boost_time = self.get_parameter('exit_boost_time').value
         self.lane_timeout = self.get_parameter('lane_timeout').value
         self.recovery_speed = self.get_parameter('recovery_speed').value
         self.recovery_angular = self.get_parameter('recovery_angular').value
@@ -342,6 +357,8 @@ class LaneController(Node):
         self.straight_since = None  # when the curvature last dropped below curve_exit
         self.lane_curve = None      # detect_lane's bend/straight, and when it came
         self.lane_curve_time = 0.0
+        self.was_curve = False
+        self.exit_time = -1e9          # when the last bend was over
         self.lane_state = 0
         self.follow = None
         self.follow_time = 0.0
@@ -429,12 +446,23 @@ class LaneController(Node):
             else:
                 self.update_curve(abs(curvature), now)
 
+            if self.was_curve and not self.curve:
+                self.exit_time = now
+            self.was_curve = self.curve
+            if self.exit_boost > 0.0 and now - self.exit_time < self.exit_boost_time:
+                curvature *= 1.0 + self.exit_boost
+
             if not self.run_active:
                 speed = self.standby_speed
             elif self.curve_speed > 0.0 and self.curve:
                 speed = self.curve_speed
             else:
                 speed = self.max_speed
+                if self.curve_speed > 0.0 and self.pre_slow_full > self.pre_slow_start:
+                    off = abs(math.atan2(left, ahead))
+                    share = (off - self.pre_slow_start) / (self.pre_slow_full - self.pre_slow_start)
+                    share = max(0.0, min(1.0, share))
+                    speed = self.max_speed + (self.curve_speed - self.max_speed) * share
             if self.limit is not None and now - self.limit_time < self.limit_timeout:
                 speed = min(speed, self.limit)
             if abs(curvature) * speed > self.cornering_rate:

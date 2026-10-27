@@ -20,8 +20,13 @@ lane_controller:
     recovery_speed: 0.05
     recovery_angular: 0.45
     single_line_slew: 0.5
-    corner_boost: 0.0         # not in real-lane-pi
-    yaw_rate_feedback: false  # off in real-lane-pi
+    # 2026-10-27, after the corner videos (deep into the corner, on the spot, out on the outer
+    # line): corner_boost 0.3 and yaw_rate_feedback on again (perception_real.yaml's; they
+    # were off here as in real-lane-pi), slow down before the bend, steer harder out of it.
+    # Closed loop TURN_SHARE=0.75 BEND_R=0.30: outside 2.5 -> 0 cm, after the bend 3.3 -> 1.6 cm
+    # (pre_slow alone did not help in the closed loop, which has no braking lag; try it here).
+    pre_slow_full: 0.22       # rad: curve_speed by then (detect_lane calls the bend at 0.25)
+    exit_boost: 0.3
 mission_manager:
   ros__parameters:
     standby_timeout: 100000.0 # start only on /autorace/manual_start (90 s would start on its own)
