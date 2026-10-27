@@ -17,6 +17,10 @@ bev_projector:
       height: 0.153         # C920 lowered, measured 15.3 cm (2026-10-08)
       pitch: 0.571          # 32.7 deg down: tape 0.50 m ahead of the axle on image row 46
       forward_offset: 0.060 # measured: lens 6 cm ahead of the wheel axle (hun)
+      # Metres the lens sits left of the robot's centre line (- right). 0 until
+      # measured: put the robot in the middle of a lane by hand and run
+      # tools/lane_center_check.py; it prints the value to set.
+      lateral_offset: 0.0
     bev:
       pixels_per_meter: 1200.0
       width: 800
@@ -41,9 +45,13 @@ detect_lane:
       path_follow: true
       path_lookahead: 0.15      # 0.15, 0.18, 0.20 tried as 'always' (2026-10-09)
       path_mode: curve          # camera target on straights, the path once a bend is in sight
-      path_lookahead_gain: 0.5  # path target 0.10 + 0.5 v, 0.13..0.22 m (0.20 at 0.19 m/s, 0.15 at 0.10)
-      path_lookahead_base: 0.10
-      path_lookahead_min: 0.13
+      path_lookahead_gain: 0.5  # path target 0.14 + 0.5 v, 0.18..0.22 m (0.22 at 0.19 m/s, 0.19 at 0.10).
+      # Was 0.10 + 0.5 v, 0.13..0.22: at 0.07 m/s in a bend the target sat 0.09-0.13 m
+      # ahead and a 12 cm offset gave a 10/m curvature, the robot overshot to the other
+      # side, and the weaving kept the detector in bend mode (2026-10-27). Further off
+      # the same offset asks half the curvature.
+      path_lookahead_base: 0.14
+      path_lookahead_min: 0.18
       path_lookahead_max: 0.22
       curve_enter_angle: 0.25   # 14 deg off the heading
       curve_exit_angle: 0.12    # 7 deg ...
@@ -127,9 +135,15 @@ lane_controller:
     min_speed: 0.05
     # The run starts on the stop line: no creeping up to it before the green.
     standby_speed: 0.0
-    pursuit_gain: 1.17        # steer a little harder than plain pure pursuit (1.0..1.3 tried, 2026-10-09)
+    # The sent turn rate may change by at most 2.5 rad/s per second: a
+    # one-picture jump of the target (the outer line lost for a moment in
+    # a bend) no longer straightens the robot up mid-bend (2026-10-27).
+    angular_slew: 0.0         # 2.5 tried 2026-10-27 18:40: the robot wove more, not less
+    pursuit_gain: 1.17        # steer a little harder than plain pure pursuit (1.0..1.3 tried, 2026-10-09;
+                              # 1.3, 1.4, 1.2 tried 2026-10-27: all wove more at the bend exits)
     max_angular: 2.0
-    cornering_rate: 0.6      # turn rate cap in bends (0.3..0.7 tried, 2026-10-09)
+    cornering_rate: 0.6      # turn rate cap in bends (0.3..0.7 tried, 2026-10-09; 0.8-1.0 tried 2026-10-27:
+                             # the bends came out no better and the exits wove more)
     # The robot turned only 75 % of the command in tight bends (inner wheel at
     # ~0 m/s): make up the difference from the gyro (2026-10-09).
     yaw_rate_feedback: false  # adaptive mode tried 2026-10-09; off by choice

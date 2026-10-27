@@ -205,6 +205,24 @@ class ConstructionMission(Node):
         # bend, and there the mission takes over only this near an obstacle.
         self.declare_parameter('bend_curvature', 2.0)
         self.declare_parameter('bend_takeover_distance', 0.20)
+        # Laser returns in the strip, two scans running, that make an
+        # obstacle: a block gives 13-20 on the real course, the robot's own
+        # front or a wall beside a tight bend 3-6 (2026-10-27).
+        self.declare_parameter('takeover_points', 3)
+        # Asking for the mission from the laser alone also goes by a wider
+        # look: returns arm_min_ahead..arm_max_ahead ahead within
+        # arm_half_width of the robot's axis (the road's width), arm_points
+        # or more for arm_scans scans. That only arms the mission (the lane
+        # follower drives on); once armed, armed_points in the strip take
+        # over. With one strip test for both, the first block came in from
+        # the inside of the bend with 5-7 returns and the mission took over
+        # 0.29 m from it, too late to get round (2026-10-27 18:29).
+        self.declare_parameter('arm_min_ahead', 0.20)
+        self.declare_parameter('arm_max_ahead', 0.60)
+        self.declare_parameter('arm_half_width', 0.30)
+        self.declare_parameter('arm_points', 3)
+        self.declare_parameter('arm_scans', 3)
+        self.declare_parameter('armed_points', 3)
         # Laser returns further off than this are left out: too coarse.
         self.declare_parameter('scan_range', 1.0)
         # What is left of a cell's count of returns one scan later.
@@ -235,6 +253,11 @@ class ConstructionMission(Node):
         # Standing cells in the road count as an obstacle only in a cluster
         # of at least this many (after joining neighbours).
         self.declare_parameter('cluster_cells', 12)
+        # Nothing further than this from the middle of the road counts as an
+        # obstacle, whatever the lines say: a sign 0.6 m left of the road was
+        # taken for the third block and the mission ended with the real one
+        # still ahead, which the robot then drove into (2026-10-27, twice).
+        self.declare_parameter('max_obstacle_across', 0.35)
         # After the last obstacle, driven at most this far looking for a lane.
         self.declare_parameter('leave_distance', 0.4)
         # Without an obstacle after this much road the mission gives up.
@@ -277,6 +300,14 @@ class ConstructionMission(Node):
         self.takeover_half_width = value('takeover_half_width')
         self.bend_curvature = value('bend_curvature')
         self.bend_takeover_distance = value('bend_takeover_distance')
+        self.takeover_points = value('takeover_points')
+        self.arm_min_ahead = value('arm_min_ahead')
+        self.arm_max_ahead = value('arm_max_ahead')
+        self.arm_half_width = value('arm_half_width')
+        self.arm_points = value('arm_points')
+        self.arm_scans = value('arm_scans')
+        self.armed_points = value('armed_points')
+        self.arm_count = 0
         self.scan_range = value('scan_range')
         self.hit_fade = value('hit_fade')
         self.lidar_offset = value('lidar_offset')
@@ -294,6 +325,7 @@ class ConstructionMission(Node):
         self.clear_distance = value('clear_distance')
         self.rear_clearance = value('rear_clearance')
         self.cluster_cells = value('cluster_cells')
+        self.max_obstacle_across = value('max_obstacle_across')
         self.leave_distance = value('leave_distance')
         self.approach_limit = value('approach_limit')
         self.obstacle_count = value('obstacle_count')
@@ -428,11 +460,16 @@ class ConstructionMission(Node):
                            ranges[near] * np.sin(angles[near])], axis=1)
 
         ahead = self.in_the_way_of(points)
-        self.in_the_way = self.in_the_way + 1 if np.count_nonzero(ahead) >= 3 else 0
+        needed = self.armed_points if self.phase == 'approach' else self.takeover_points
+        self.in_the_way = self.in_the_way + 1 if np.count_nonzero(ahead) >= needed else 0
 
-        if self.phase is None and self.in_the_way >= 2:
-            # The manager takes this only while lane following, and once.
-            self.pub_trigger.publish(String(data='construction'))
+        if self.phase is None:
+            wide = ((points[:, 0] > self.arm_min_ahead) & (points[:, 0] < self.arm_max_ahead)
+                    & (np.abs(points[:, 1]) < self.arm_half_width))
+            self.arm_count = self.arm_count + 1 if np.count_nonzero(wide) >= self.arm_points else 0
+            if self.in_the_way >= 2 or self.arm_count >= self.arm_scans:
+                # The manager takes this only while lane following, and once.
+                self.pub_trigger.publish(String(data='construction'))
 
         pose = self.pose_at(msg.header.stamp)
         if pose is None:
@@ -676,6 +713,8 @@ class ConstructionMission(Node):
         left, right = self.walls['yellow'], self.walls['white']
         if left is None:
             left, right = 0.35, -0.35
+        left = min(left, self.max_obstacle_across)
+        right = max(right, -self.max_obstacle_across)
         near = ((along > -0.5) & (along < self.clear_distance)
                 & (across > right + 0.01) & (across < left - 0.01))
         if np.count_nonzero(near) >= 3:
@@ -744,6 +783,8 @@ class ConstructionMission(Node):
         left, right = self.walls['yellow'], self.walls['white']
         if left is None:
             left, right = 0.35, -0.35
+        left = min(left, self.max_obstacle_across)
+        right = max(right, -self.max_obstacle_across)
         standing = ((along > -self.rear_clearance) & (along < self.clear_distance)
                     & (across > right + 0.01) & (across < left - 0.01))
         if np.count_nonzero(standing) < 3:

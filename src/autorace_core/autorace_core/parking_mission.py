@@ -71,6 +71,8 @@ from std_msgs.msg import Bool
 from std_msgs.msg import Float64
 from std_msgs.msg import String
 
+from autorace_msgs.msg import MissionState
+
 
 def wrap(angle):
     return math.atan2(math.sin(angle), math.cos(angle))
@@ -92,8 +94,19 @@ class ParkingMission(Node):
         # shiny mat throws the window's light back white (2026-10-27).
         self.declare_parameter('near_yellow_distance', 0.30)
         self.declare_parameter('near_yellow_missing', 3)
+        # The lane's yellow has to be gone from the whole picture (near and
+        # far) for this much road: its left line has a break of ~0.25 m
+        # where the road's line joins it, and three pictures without yellow
+        # near the robot declared the lot 0.3 m early (2026-10-27 17:13).
+        self.declare_parameter('lot_gone_distance', 0.10)
         self.declare_parameter('lot_ahead_at_end', 0.15)
         self.declare_parameter('lane_length_max', 0.60)
+        # And not before this much lane: the lane's lines have a kink where
+        # the road's line joins them, and 0.39 m up the lane the yellow went
+        # missing near the robot for three pictures; the lot was declared
+        # there and the robot "parked" in the lane (2026-10-27 17:13). The
+        # lot came 0.52 and 0.61 m up the lane in the runs that worked.
+        self.declare_parameter('lane_length_min', 0.45)
         # From where the white begins to level with the middle of the bays,
         # and how far from the middle of the aisle the axle goes into a bay:
         # past the middle of the bay, as most of the robot is behind its axle.
@@ -104,6 +117,10 @@ class ParkingMission(Node):
         # The arc into the bay, and how far short of the middle of the aisle
         # the robot stops backing out to turn.
         self.declare_parameter('swing_radius', 0.10)
+        # The swing into the bay begins this much before its geometry says:
+        # the real robot turns late and wide, and ended the swing 7 cm past
+        # the bay's centre line, its wheel over the bay's line (2026-10-27).
+        self.declare_parameter('swing_lead', 0.06)
         self.declare_parameter('turn_offset', 0.06)
         # Where the lane follower takes over again: this far before the white,
         # far enough down the lane for the lines of the lot to be behind it.
@@ -115,6 +132,10 @@ class ParkingMission(Node):
         self.declare_parameter('bay_look_far', 0.45)
         # The bay taken when the laser has seen nothing in either.
         self.declare_parameter('default_bay', 'left')
+        # Laser returns a bay needs, summed over the scans along the aisle,
+        # to count as taken; fewer on both sides and default_bay is taken.
+        # A block beside the aisle gave 50-156, nothing 0 (2026-10-27).
+        self.declare_parameter('bay_min_returns', 10)
         self.declare_parameter('lidar_offset', -0.032)
         self.declare_parameter('speed', 0.08)
         # The lane follower is held to this on the way up to the lot and
@@ -127,6 +148,24 @@ class ParkingMission(Node):
         # The mission is over when the robot is heading along the road again,
         # or has driven this far from the lot without getting there.
         self.declare_parameter('exit_limit', 1.6)
+        # Out of the lane on to the road on an arc of entrance_radius, the
+        # mirror of the turn in, from the lane's beginning (where the turn
+        # in ended); then the lane follower. Its own 90 deg turn at the
+        # lane's mouth put a wheel over the line (2026-10-27).
+        self.declare_parameter('exit_arc', True)
+        # Turn on the spot instead of on an arc: at the entrance (drive to
+        # the lane's middle, stop, 90 deg left) and into the bay (drive to
+        # the bay's centre line, stop, 90 deg). Asked for 2026-10-27; the
+        # arcs came out 1-8 cm off where the robot turned late and wide.
+        self.declare_parameter('entrance_turn_in_place', False)
+        # How far the turn on the spot at the entrance goes. The lane ran
+        # 5-9 deg further left than a 90 deg turn from the road's heading
+        # at the turn point, three runs running (2026-10-27).
+        self.declare_parameter('entrance_turn_angle', 1.5708)
+        # And the turn on the spot into the bay (the drive into the bay then
+        # squares up to the bay's axis). It looked like 100 deg by eye.
+        self.declare_parameter('bay_turn_angle', 1.5708)
+        self.declare_parameter('bay_turn_in_place', False)
         # The aisle's direction from the yellow lines of this much lane before
         # the lot, each side at least this long in view, and no more than
         # this far off the robot's heading (else the robot's heading is used).
@@ -150,6 +189,12 @@ class ParkingMission(Node):
         # 0.30 was a hair too much with the robot set down 0.3 m before
         # the line (2026-10-27).
         self.declare_parameter('entrance_line_min', 0.20)
+        # Pictures in a row without the line before its end counts as the gap.
+        self.declare_parameter('entrance_empty_pictures', 3)
+        # Whether the line watched before the mission began may be the
+        # entrance's: yes for a start by the sign (it stands at the gap),
+        # never when the mission follows the construction zone.
+        self.declare_parameter('entrance_from_memory', True)
         self.declare_parameter('entrance_gap_half', 0.15)
         self.declare_parameter('entrance_radius', 0.17)
         self.declare_parameter('entrance_speed', 0.08)
@@ -185,7 +230,9 @@ class ParkingMission(Node):
         self.near_yellow_distance = value('near_yellow_distance')
         self.near_yellow_missing = value('near_yellow_missing')
         self.lot_ahead_at_end = value('lot_ahead_at_end')
+        self.lot_gone_distance = value('lot_gone_distance')
         self.lane_length_max = value('lane_length_max')
+        self.lane_length_min = value('lane_length_min')
         self.bay_station = value('bay_station')
         self.aisle_half_width = value('aisle_half_width')
         self.bay_depth = value('bay_depth')
@@ -196,16 +243,25 @@ class ParkingMission(Node):
         self.bay_look_near = value('bay_look_near')
         self.bay_look_far = value('bay_look_far')
         self.default_bay = value('default_bay')
+        self.bay_min_returns = value('bay_min_returns')
         self.lidar_offset = value('lidar_offset')
         self.speed = value('speed')
         self.approach_speed = value('approach_speed')
         self.turn_rate = value('turn_rate')
         self.park_time = value('park_time')
         self.exit_limit = value('exit_limit')
+        self.exit_arc = value('exit_arc')
+        self.entrance_turn_in_place = value('entrance_turn_in_place')
+        self.entrance_turn_angle = value('entrance_turn_angle')
+        self.bay_turn_angle = value('bay_turn_angle')
+        self.bay_turn_in_place = value('bay_turn_in_place')
+        self.swing_lead = value('swing_lead')
         self.find_entrance = value('find_entrance')
         self.entrance_half_lane = value('entrance_half_lane')
         self.entrance_gap_min = value('entrance_gap_min')
         self.entrance_line_min = value('entrance_line_min')
+        self.entrance_empty_pictures = value('entrance_empty_pictures')
+        self.entrance_from_memory = value('entrance_from_memory')
         self.entrance_gap_half = value('entrance_gap_half')
         self.entrance_radius = value('entrance_radius')
         self.entrance_speed = value('entrance_speed')
@@ -245,6 +301,9 @@ class ParkingMission(Node):
         self.entrance_seen = None
         self.entrance = None
         self.arc_yaw = None         # heading the turn in started on
+        self.lane_start_along = None   # where the turn in ended, along the aisle from the lot
+        self.manager_detail = ''    # the manager's state detail, e.g. 'parking:after:construction'
+        self.exit_arc_yaw = None    # heading the turn out started on
         self.yellow_end = None      # distance travelled to where the left yellow line ends
         self.yellow_start = None    # and to where it was first seen in this stretch
         self.empty_pictures = 0     # pictures in a row with no left yellow line
@@ -255,12 +314,16 @@ class ParkingMission(Node):
         self.lane_dirs = deque()    # (distance travelled, world direction of a lane line in a picture)
         self.lane_sides = {'left': None, 'right': None}   # (left of the robot, when) each line was last seen
         self.near_yellow_gone = 0   # pictures in a row without yellow close ahead
+        self.yellow_gone_at = None  # distance travelled when the picture last lost all yellow
         self.lane_middles = deque() # (distance travelled, the lane's middle left of the robot)
+        self.white_ahead = deque()  # (time, white points 0.15-0.5 m ahead) seen up the lane
         self.phase_start = 0.0      # time and distance travelled
         self.phase_travelled = 0.0
 
         self.create_subscription(
             Bool, '/autorace/mission/parking/active', self.callback_active, 1)
+        self.create_subscription(
+            MissionState, '/autorace/mission_state', self.callback_mission_state, 1)
         self.create_subscription(Odometry, '/odom', self.callback_odom, 1)
         self.create_subscription(LaserScan, '/scan', self.callback_scan, 1)
         self.create_subscription(
@@ -290,11 +353,26 @@ class ParkingMission(Node):
                 self.white_seen_at = self.odometry[-1][4]
                 self.entrance_seen = None
                 self.entrance = None
-                # The left yellow line has been watched all along the road
-                # (yellow_start, yellow_end, yellow_side): the sign stands
-                # only half a metre before the entrance, and from the sign
-                # alone the line was not seen long enough (0.26 m of 0.30)
-                # to count its end as the entrance (2026-10-27).
+                self.arc_yaw = None
+                # The left yellow line is watched while idle too. Started by
+                # the sign, which stands at the gap, that memory is the
+                # entrance (the line may have ended just before). Started
+                # right after the construction zone, the zone's own yellow
+                # edge, just ended, was taken for the entrance twice and the
+                # robot parked beside the road (2026-10-27, 17:13 and 17:59):
+                # then the entrance is looked for in what is seen from now on.
+                # The manager's state lags its activation: at this moment
+                # its detail still names the construction zone it has just
+                # left ('construction:trigger', 'construction done').
+                chained = ('after:' in self.manager_detail
+                           or self.manager_detail.startswith('construction'))
+                if chained or not self.entrance_from_memory:
+                    self.get_logger().info(
+                        f'Parking: started ({self.manager_detail}); the entrance from the lines ahead.')
+                    self.yellow_start = None
+                    self.yellow_end = None
+                    self.yellow_side = None
+                    self.empty_pictures = 0
                 self.up_lane = False
                 if self.find_entrance:
                     self.get_logger().info('Parking: looking for the entrance to the lot.')
@@ -304,6 +382,10 @@ class ParkingMission(Node):
         elif self.phase is not None:
             self.get_logger().info(f'Parking: deactivated during {self.phase}.')
             self.phase = None
+
+    def callback_mission_state(self, msg):
+        """Why the manager is where it is: 'parking:sign:parking', 'parking:after:construction'."""
+        self.manager_detail = msg.detail
 
     def callback_odom(self, msg):
         position = msg.pose.pose.position
@@ -361,6 +443,11 @@ class ParkingMission(Node):
             if self.up_lane:
                 near = points[(points[:, 0] > 0.12) & (points[:, 0] < self.near_yellow_distance)]
                 self.near_yellow_gone = 0 if len(near) >= 10 else self.near_yellow_gone + 1
+                anywhere = points[(points[:, 0] > 0.12) & (points[:, 0] < 0.45)]
+                if len(anywhere) >= 10:
+                    self.yellow_gone_at = None
+                elif self.yellow_gone_at is None:
+                    self.yellow_gone_at = self.odometry[-1][4]
             if len(points) == 0:
                 return
             x, y, yaw, travelled = self.pose_at(msg.header.stamp)
@@ -404,10 +491,51 @@ class ParkingMission(Node):
             return None
         return wrap(yaw + angle)
 
+    def aisle_middle_by_white(self):
+        """The aisle's middle left of the robot by the lot's white lines ahead.
+
+        Up the lane the lot's two lines along the aisle show 0.15-0.5 m ahead,
+        one each side of the robot, about an aisle apart. The lane's middle
+        put the aisle 5 cm to the right of where it was in three runs, and
+        the robot that turned into the right bay from there stopped with its
+        front over the bay's far line (2026-10-27). None if not seen.
+        """
+        if not self.white_ahead:
+            return None
+        points = np.concatenate([p for _, p in self.white_ahead])
+        if len(points) < 100:
+            return None
+        counts, edges = np.histogram(points[:, 1], bins=np.arange(-0.45, 0.46, 0.02))
+        centres = (edges[:-1] + edges[1:]) / 2.0
+        peaks = [(c, n) for c, n in zip(centres, counts) if n >= 0.15 * counts.max() and n >= 30]
+        # Join neighbouring bins into lines.
+        lines = []
+        for c, n in peaks:
+            if lines and c - lines[-1][-1][0] <= 0.021:
+                lines[-1].append((c, n))
+            else:
+                lines.append([(c, n)])
+        sides = [sum(c * n for c, n in line) / sum(n for _, n in line) for line in lines]
+        left = [y for y in sides if y > 0.0]
+        right = [y for y in sides if y < 0.0]
+        if not left or not right:
+            return None
+        y_left, y_right = min(left), max(right)
+        width = y_left - y_right
+        if not 0.18 <= width <= 0.34:
+            return None
+        return (y_left + y_right) / 2.0
+
     def callback_white(self, msg):
         if self.phase not in (None, 'to_entrance', 'turn_in', 'aisle', 'leave') or not self.odometry:
             return
         points = point_cloud2.read_points_numpy(msg, field_names=('x', 'y'))
+        if self.phase == 'turn_in' and self.up_lane:
+            now = self.now()
+            ahead = points[(points[:, 0] > 0.15) & (points[:, 0] < 0.5) & (np.abs(points[:, 1]) < 0.45)]
+            self.white_ahead.append((now, ahead))
+            while self.white_ahead and now - self.white_ahead[0][0] > 0.6:
+                self.white_ahead.popleft()
         x, y, yaw, travelled = self.pose_at(msg.header.stamp)
         if self.phase is None:
             # Idle: keep watching the left yellow line, so that when the
@@ -428,17 +556,28 @@ class ParkingMission(Node):
             self.see_aisle(points, yaw)
             return
         if self.up_lane:
-            up = travelled - self.phase_travelled
-            if up < 0.10:
+            # The lane's length is counted from the road's middle: a turn on
+            # the spot ends there, the arc ends entrance_radius up the lane.
+            up = travelled - self.phase_travelled - self.lane_offset()
+            if up < self.lane_length_min:
                 return
-            if self.near_yellow_gone >= self.near_yellow_missing:
-                begins, why = self.lot_ahead_at_end, 'the yellow lines have ended'
+            gone = (travelled - self.yellow_gone_at) if self.yellow_gone_at is not None else 0.0
+            if (self.near_yellow_gone >= self.near_yellow_missing
+                    and gone >= self.lot_gone_distance):
+                begins = max(0.0, self.lot_ahead_at_end - gone)
+                why = f'the yellow lines have ended ({gone:.2f} m without any)'
             elif up >= self.lane_length_max:
                 begins, why = 0.0, f'{up:.2f} m up the lane'
             else:
                 return
             middle = self.lane_middle(travelled)
-            self.get_logger().info(f'Parking: the lot, as {why}; lane middle {middle:+.3f} m to the left.')
+            by_white = self.aisle_middle_by_white()
+            self.get_logger().info(
+                f'Parking: the lot, as {why}; lane middle {middle:+.3f} m to the left, '
+                + (f'aisle by its white lines {by_white:+.3f}.' if by_white is not None
+                   else 'white lines of the aisle not made out.'))
+            if by_white is not None:
+                middle = by_white
         else:
             if len(points) < self.white_min_points:
                 return
@@ -479,6 +618,11 @@ class ParkingMission(Node):
                 'Parking: aisle %+.2f rad from the robot by the yellow lines '
                 '(heading of the last 15 cm %+.2f).'
                 % (wrap(direction - yaw), wrap(heading - yaw)))
+        if self.up_lane:
+            # The lane runs from where the turn in ended to the lot.
+            self.lane_start_along = -(travelled - self.phase_travelled + begins) + self.lane_offset()
+        else:
+            self.lane_start_along = None
         self.lot = (x + math.cos(yaw) * begins - math.sin(yaw) * middle,
                     y + math.sin(yaw) * begins + math.cos(yaw) * middle,
                     direction)
@@ -540,7 +684,7 @@ class ParkingMission(Node):
         # pictures in a row.
         if (self.yellow_end is None or turning or len(right) < 10
                 or self.yellow_end - self.yellow_start < self.entrance_line_min
-                or self.empty_pictures < 3):
+                or self.empty_pictures < self.entrance_empty_pictures):
             return
         empty = travelled_pic + 0.45 - self.yellow_end
         if empty < self.entrance_gap_min:
@@ -549,7 +693,8 @@ class ParkingMission(Node):
             # A gap seen while idle is none of this node's business (yet).
             return
         centre = self.yellow_end + self.entrance_gap_half
-        straight_on = max(0.0, centre - self.entrance_radius - travelled)
+        lead = 0.0 if self.entrance_turn_in_place else self.entrance_radius
+        straight_on = max(0.0, centre - lead - travelled)
         _, x_now, y_now, _, _ = self.odometry[-1]
         self.entrance = (x_now, y_now, yaw_now, straight_on)
         self.arc_yaw = None
@@ -769,6 +914,17 @@ class ParkingMission(Node):
         offset = max(-0.35, min(0.35, float(np.median(recent))))
         return wrap(self.up_lane_yaw + offset), len(recent)
 
+    def lane_offset(self):
+        """How far the turn in ended short of where the arc's would have.
+
+        The lane's length (lane_length_min/max) and the mouth the way out
+        turns at are measured from the arc's end, entrance_radius up the
+        lane from the road's middle; a turn on the spot ends on the road's
+        middle itself, entrance_radius short of that (the lot came 0.17 m
+        early with the turn on the spot, 2026-10-27).
+        """
+        return self.entrance_radius if self.entrance_turn_in_place else 0.0
+
     def lane_middle(self, travelled):
         """The lane's middle left of the robot, by the lines of the last stretch.
 
@@ -797,23 +953,32 @@ class ParkingMission(Node):
                 self.pub_limit.publish(Float64(data=self.entrance_speed))
                 return None
             self.arc_yaw = yaw
-            self.get_logger().info('Parking: at the entrance, round to the left.')
+            self.get_logger().info('Parking: at the entrance, '
+                                   + ('turning left on the spot.' if self.entrance_turn_in_place
+                                      else 'round to the left.'))
         turned = wrap(yaw - self.arc_yaw)
         twist = Twist()
-        twist.linear.x = self.entrance_speed
-        if turned >= math.pi / 2.0 - 0.05:
+        if self.entrance_turn_in_place:
+            twist, there = self.turn_to(turned, self.entrance_turn_angle)
+            done = there
+        else:
+            twist.linear.x = self.entrance_speed
+            twist.angular.z = self.entrance_speed / self.entrance_radius
+            done = turned >= math.pi / 2.0 - 0.05
+        if done:
             self.get_logger().info('Parking: turned in, up the lane to the lot between its lines.')
             self.white_seen_at = self.odometry[-1][4]
             self.yellow_memory.clear()
             self.up_lane = True
             self.up_lane_yaw = yaw
             self.near_yellow_gone = 0
+            self.yellow_gone_at = None
+            self.white_ahead.clear()
             self.lane_middles.clear()
             self.lane_dirs.clear()
             self.lane_sides = {'left': None, 'right': None}
             self.enter('turn_in')
             return Twist()
-        twist.angular.z = self.entrance_speed / self.entrance_radius
         return twist
 
     def update(self):
@@ -854,13 +1019,20 @@ class ParkingMission(Node):
         twist = Twist()
 
         if self.phase == 'aisle':
-            swing_at = self.bay_station - self.swing_radius
+            if self.bay_turn_in_place:
+                # The robot rolls on while it stops to turn: 4.8 cm past the
+                # bay's centre line on 2026-10-27, which the drive into the
+                # bay then made up by going in 10 deg askew.
+                swing_at = self.bay_station - self.swing_lead
+            else:
+                swing_at = self.bay_station - self.swing_radius - self.swing_lead
             twist = self.drive(heading, 0.0, self.in_aisle(across), 1.0)
             if along >= swing_at:
                 left, right = self.seen['left'], self.seen['right']
-                if left == right:
+                if left == right or max(left, right) < self.bay_min_returns:
                     self.get_logger().warn(
-                        f'Parking: nothing made out in either bay, taking the {self.default_bay}.')
+                        f'Parking: nothing made out in either bay (left {left}, right {right}), '
+                        f'taking the {self.default_bay}.')
                     self.side = 1.0 if self.default_bay == 'left' else -1.0
                 else:
                     self.side = -1.0 if left > right else 1.0
@@ -870,10 +1042,15 @@ class ParkingMission(Node):
                 self.enter('swing_in')
 
         elif self.phase == 'swing_in':
-            twist.linear.x = self.speed
-            twist.angular.z = self.side * self.speed / self.swing_radius
-            if self.side * heading >= math.pi / 2.0 - 0.05:
-                self.enter('into_bay')
+            if self.bay_turn_in_place:
+                twist, there = self.turn_to(heading, self.side * self.bay_turn_angle)
+                if there:
+                    self.enter('into_bay')
+            else:
+                twist.linear.x = self.speed
+                twist.angular.z = self.side * self.speed / self.swing_radius
+                if self.side * heading >= math.pi / 2.0 - 0.05:
+                    self.enter('into_bay')
 
         elif self.phase == 'into_bay':
             # Along the line across the aisle at the bay station; to the left
@@ -907,8 +1084,24 @@ class ParkingMission(Node):
                 'Parking: leaving, %+.3f m left of the middle (odometry %+.3f).'
                 % (off_line, -across), throttle_duration_sec=1.0)
             twist = self.drive(heading, math.pi, off_line, 1.0)
-            if along <= self.leave_station:
+            if self.exit_arc and self.lane_start_along is not None:
+                if along <= self.lane_start_along:
+                    self.get_logger().info(
+                        'Parking: at the mouth of the lane, round to the left on to the road.')
+                    self.exit_arc_yaw = self.odometry[-1][3]
+                    self.enter('exit_arc')
+            elif along <= self.leave_station:
                 self.get_logger().info('Parking: out of the lot, keeping left for the road.')
+                self.enter('exit')
+
+        elif self.phase == 'exit_arc':
+            # The mirror of the turn in: a quarter circle to the left from
+            # the lane's beginning lands on the road's middle, heading along it.
+            turned = wrap(self.odometry[-1][3] - self.exit_arc_yaw)
+            twist.linear.x = self.entrance_speed
+            twist.angular.z = self.entrance_speed / self.entrance_radius
+            if turned >= math.pi / 2.0 - 0.05:
+                self.get_logger().info('Parking: on the road, the lane follower takes it.')
                 self.enter('exit')
 
         if self.phase == 'exit':

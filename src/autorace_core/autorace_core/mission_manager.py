@@ -101,6 +101,11 @@ class MissionManager(Node):
         # the camera says is down costs only time, and a bar mistaken once
         # must not leave the real one ignored (2026-10-14).
         self.declare_parameter('repeatable_missions', '')
+        # Missions started the moment another is over, sign or no sign:
+        # 'construction:parking,level_crossing:tunnel'. The parking sign
+        # stands at the end of the construction zone and was read only
+        # within 0.8 m (2026-10-27); this does not wait for it.
+        self.declare_parameter('after_mission', '')
 
         self.green_streak = self.get_parameter('green_streak').value
         self.sign_streak = self.get_parameter('sign_streak').value
@@ -110,6 +115,8 @@ class MissionManager(Node):
         self.enabled = set(enabled.split(',')) if enabled else set(MISSIONS.keys())
         repeatable = self.get_parameter('repeatable_missions').value.replace(' ', '')
         self.repeatable = set(repeatable.split(',')) if repeatable else set()
+        after = self.get_parameter('after_mission').value.replace(' ', '')
+        self.after = dict(pair.split(':', 1) for pair in after.split(',') if ':' in pair)
         self.timeouts = {
             name: self.get_parameter(f'mission_timeout.{name}').value for name in MISSIONS
         }
@@ -217,6 +224,11 @@ class MissionManager(Node):
         self.completed.add(mission)
         detail = f'{mission} timeout' if timed_out else f'{mission} done'
         self.transition(MissionState.LANE_DRIVE, detail)
+        follow_up = self.after.get(mission)
+        if follow_up is not None:
+            self.pending = None
+            self.request_mission(follow_up, f'after:{mission}')
+            return
         if self.pending is not None:
             next_mission, reason, when = self.pending
             self.pending = None

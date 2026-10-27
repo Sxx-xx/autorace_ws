@@ -9,12 +9,18 @@
 mission_manager:
   ros__parameters:
     enabled_missions: 'intersection,construction,parking,level_crossing,tunnel'
-    repeatable_missions: 'level_crossing'
+    # Construction too: armed by the laser from a wider look, it may be
+    # armed by something that is not the zone and end with nothing met; it
+    # must still run at the zone (2026-10-27).
+    repeatable_missions: 'level_crossing,construction'
+    # Parking starts the moment the construction zone is done, sign or no
+    # sign (the sign stands at its end and is read only within 0.8 m).
+    after_mission: 'construction:parking'
     green_streak: 5
     sign_streak: 3
     mission_timeout:
       intersection: 120.0
-      parking: 90.0
+      parking: 120.0          # the entrance may be some way past the construction zone
 
 traffic_light_mission:
   ros__parameters:
@@ -43,8 +49,15 @@ construction_mission:
     # robot brushed them turning past (2026-10-10). The axle still needs only
     # robot_radius from an obstacle to get through; the line may be driven on.
     robot_radius: 0.11
-    comfort_clearance: 0.25
-    line_slack: 0.01
+    # Past a block the gap to the line is ~26 cm for an 18 cm robot (2026-10-27:
+    # the axle 12-15 cm from the block, 13 cm from the line, the wheel 4 cm
+    # inside it and the tyre caught the line). The path sits in the middle of
+    # the gap, the line counted line_slack further off than it is; negative
+    # counts it nearer, which moves the path towards the block and keeps the
+    # wheel off the line: -0.03 puts the axle 11-12 cm from the block (the
+    # radius is the hard limit) and 14-15 cm from the line.
+    comfort_clearance: 0.20   # was 0.25: never reachable here, and it sent the robot out to the line where there was room
+    line_slack: 0.0           # -0.03 (path 1.5 cm towards the block) tried 18:29: the axle came within 3 cm of a block
     # The real zone (50 cm road) holds 3 obstacles; on 2026-10-10 the mission
     # ended after the first and the lane follower met the second.
     obstacle_count: 3
@@ -52,22 +65,94 @@ construction_mission:
     # The zone sits between two bends: the first obstacle came in from the
     # side 6 cm off. The strip now follows the arc in a bend; reach further.
     bend_takeover_distance: 0.35
+    # Obstacles only within 0.35 m of the road's middle: a sign 0.6 m left
+    # of the road counted as the third block and the mission ended with the
+    # real third block still ahead (2026-10-27, two runs, one crash).
+    max_obstacle_across: 0.35
+    # Returns in the takeover strip that make an obstacle (two scans running).
+    # Over 12 runs on 2026-10-27 a block gave 13-20 returns; the two false
+    # starts (the robot's own front 11-22 cm ahead, a wall beside a tight
+    # bend) gave 3-6. 8 keeps all seven true starts within 0.3 s.
+    takeover_points: 8
+    # Armed from a wider look (anything 0.2-0.6 m ahead within the road's
+    # width, 3 scans); once armed, 3 returns in the strip take over.
+    arm_min_ahead: 0.20
+    arm_max_ahead: 0.60
+    arm_half_width: 0.30
+    arm_points: 3
+    arm_scans: 3
+    armed_points: 3
 
 parking_mission:
   ros__parameters:
     bay_station: 0.24
-    bay_depth: 0.29
+    # The bays measured 0.23 m deep from the aisle's edge (white lines at
+    # 0.12 and 0.35 from the aisle's middle, three runs 2026-10-27): with
+    # 0.29 the robot's front stood over the far line. The front is 0.07
+    # ahead of the axle, the tail 0.10 behind it: the axle between 0.22
+    # and 0.28 keeps both inside; 0.24 leaves 4 cm at the front.
+    bay_depth: 0.24
     speed: 0.16
-    approach_speed: 0.18
+    # No slowing down on the way to the entrance (the lane follower's top
+    # speed is 0.19); the search for the gap runs at road speed.
+    approach_speed: 0.19
+    # The entrance: looked for over this much road after the mission starts
+    # (it starts right after the construction zone now), the left yellow
+    # line seen this long before it, gone for this many pictures, a gap at
+    # least this long. Loosened 2026-10-27 (were 2.5 m, 0.20 m, 3, 0.06 m).
+    entrance_limit: 6.0
+    entrance_line_min: 0.12
+    entrance_empty_pictures: 2
+    entrance_gap_min: 0.05
+    # The entrance only from lines seen after the mission starts (no sign
+    # in use for now: it follows the construction zone, whose yellow edge
+    # had just ended and was taken for the entrance, 2026-10-27).
+    entrance_from_memory: false
+    # The lot: not before 0.45 m up the lane, and the yellow gone near the
+    # robot for 5 pictures (was 3: a kink in the lane's line at 0.39 m
+    # declared the lot and the robot parked in the lane, 2026-10-27 17:13).
+    lane_length_min: 0.45
+    # The lot is declared this far up the lane at the latest (plus 0.17 for
+    # a turn on the spot at the entrance). 0.60 -> 0.65 by request (2026-10-27):
+    # the lot, and the bay with it, 5 cm further in.
+    lane_length_max: 0.65
+    near_yellow_missing: 5
     # 1.0 rad/s: faster spins slipped in the sim and the odometry over-counted.
     # Real tyres on Formex may differ; check the heading after a spin.
-    turn_rate: 1.0
+    turn_rate: 1.2            # 1.0 -> 1.2 (2026-10-27): the turns on the spot could be quicker
     # Out of the bay as soon as it is in.
     park_time: 0.0
+    # The swing into the bay 6 cm early: the robot turned late and wide and
+    # ended 7 cm past the bay's centre line, a wheel over the bay's line.
+    # Out of the lane on an arc from the lane's beginning instead of the
+    # lane follower's own 90 deg turn at the mouth (wheel on the line).
+    swing_lead: 0.14          # the turn on the spot into the bay begins this far before its centre line: at along 0.10 by request (2026-10-27)
+    exit_arc: true
+    # Back out of the bay to this far short of the aisle's middle before
+    # turning to face out (the tail swings towards the other bay). 0.06
+    # left the robot's tail in the bay and it turned there; 0.02 backs out
+    # 4 cm further (2026-10-27).
+    turn_offset: 0.02
+    # Turns on the spot at the entrance and into the bay (2026-10-27): drive
+    # to the lane's middle / the bay's centre line, stop, turn 90 deg at
+    # turn_rate. The arcs (entrance_radius / swing_radius) are then unused
+    # going in; the way out still takes the arc (exit_arc).
+    entrance_turn_in_place: true
+    bay_turn_in_place: true
+    entrance_turn_angle: 1.5708  # 90 deg (96 tried on paper only: the lane ran 5-9 deg further left by the camera)
+    # Into the bay a little short of 90 (it looked like 100 by eye); the
+    # drive into the bay squares up to the bay's axis.
+    bay_turn_angle: 1.396        # 80 deg (85 -> 80 by request; the drive into the bay squares up to the axis)
+    # After the construction zone the road speed (0.19) is kept to the
+    # entrance; the turn in and the lane to the lot were 0.08 and felt slow
+    # (2026-10-27). 0.12: the arc of 0.17 m turns at 0.7 rad/s.
+    entrance_speed: 0.12
+    up_lane_speed: 0.12
     # The middle of the lane to the lot, past the end of the road's left
-    # yellow line. With 0.15 the turn in ended 5-7 cm right of the lane's
-    # middle in two runs (2026-10-27).
-    entrance_gap_half: 0.19
+    # yellow line. With 0.15 the turn in (an arc) ended 5-7 cm right of the
+    # lane's middle; with 0.19 the turn on the spot ended 8.5 cm right of it
+    # in three runs (2026-10-27), so 0.27.
+    entrance_gap_half: 0.15   # 0.17 -> 0.15 by request (turn 2 cm sooner past the yellow line end), 2026-10-27
 
 level_crossing_mission:
   ros__parameters:

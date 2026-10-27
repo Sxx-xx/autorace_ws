@@ -47,6 +47,11 @@ class BevProjector(Node):
         self.declare_parameter('camera.height', 0.20)
         self.declare_parameter('camera.pitch', 0.30)
         self.declare_parameter('camera.forward_offset', 0.073)
+        # Where the camera sits across the robot: metres left of the robot's
+        # centre line (negative: right). With it wrong, every lane the robot
+        # "keeps the middle of" is off by that much to one side. Measure
+        # with tools/lane_center_check.py.
+        self.declare_parameter('camera.lateral_offset', 0.0)
         self.declare_parameter('bev.pixels_per_meter', 1200.0)
         self.declare_parameter('bev.width', 1000)
         self.declare_parameter('bev.height', 600)
@@ -61,6 +66,7 @@ class BevProjector(Node):
         self.height = self.get_parameter('camera.height').value
         self.pitch = self.get_parameter('camera.pitch').value
         self.forward_offset = self.get_parameter('camera.forward_offset').value
+        self.lateral_offset = self.get_parameter('camera.lateral_offset').value
         self.ppm = self.get_parameter('bev.pixels_per_meter').value
         self.out_w = self.get_parameter('bev.width').value
         self.out_h = self.get_parameter('bev.height').value
@@ -96,8 +102,10 @@ class BevProjector(Node):
 
     def project(self, distance, lateral):
         """Image pixel of a ground point `distance` ahead of the robot centre."""
-        # Distances are given from the robot centre; the camera sits ahead of it.
+        # Distances are given from the robot centre; the camera sits ahead of
+        # it, and maybe a little to one side.
         ahead = distance - self.forward_offset
+        lateral = lateral - self.lateral_offset
         cos_p, sin_p = np.cos(self.pitch), np.sin(self.pitch)
         # Camera frame: x forward along the optical axis, y left, z up.
         x_c = ahead * cos_p + self.height * sin_p

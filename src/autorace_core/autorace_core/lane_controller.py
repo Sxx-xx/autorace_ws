@@ -178,6 +178,11 @@ class LaneController(Node):
         # A speed limit on /control/max_vel holds only while it keeps coming.
         self.declare_parameter('limit_timeout', 0.5)
         self.declare_parameter('publish_rate', 50.0)
+        # The turn rate sent may change by at most this much a second (0:
+        # no limit). In a tight bend the outer line comes and goes and the
+        # target jumps for a picture or two; sent as it comes, the robot
+        # straightened up mid-bend and wove back (2026-10-27).
+        self.declare_parameter('angular_slew', 0.0)
         # Stop and turn on the spot at bends instead of steering through them
         # (the real robot's lane camera sees too little road to steer round a
         # bend at speed). Off by default: the sim keeps pure pursuit.
@@ -250,6 +255,8 @@ class LaneController(Node):
         self.follow_timeout = self.get_parameter('follow_timeout').value
         self.limit_timeout = self.get_parameter('limit_timeout').value
         rate = self.get_parameter('publish_rate').value
+        self.angular_slew = self.get_parameter('angular_slew').value / rate
+        self.sent_angular = 0.0
         self.turn_in_place = self.get_parameter('turn_in_place').value
         self.turn_enter_angle = self.get_parameter('turn_enter_angle').value
         self.turn_rate = self.get_parameter('turn_rate').value
@@ -430,6 +437,10 @@ class LaneController(Node):
         if self.yr_on:
             twist.angular.z = self.yaw_rate_correct(twist.angular.z, now)
             self.yr_sent.append((now, twist.linear.x, twist.angular.z))
+        if self.angular_slew > 0.0:
+            twist.angular.z = max(self.sent_angular - self.angular_slew,
+                                  min(self.sent_angular + self.angular_slew, twist.angular.z))
+        self.sent_angular = twist.angular.z
         self.pub_cmd_vel.publish(twist)
 
     def callback_imu(self, msg):
