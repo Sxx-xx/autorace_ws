@@ -222,6 +222,7 @@ class TunnelTestMission(Node):
         self.path = None               # waypoints (start frame), the robot first
         self.planned_time = -math.inf
         self.brightness = None         # the forward camera's mean grey
+        self.scan_time = None          # when the last scan came
         self.phase_since = 0.0         # when align or leave began
         self.aligned_count = 0
         self.leave_from = None         # where leave began (start frame)
@@ -277,6 +278,7 @@ class TunnelTestMission(Node):
         self.callback_odom_pose()
 
     def callback_scan(self, msg):
+        self.scan_time = self.now()
         ranges = np.asarray(msg.ranges, dtype=np.float32)
         angles = msg.angle_min + np.arange(len(ranges)) * msg.angle_increment
         seen = np.isfinite(ranges) & (ranges > msg.range_min + 1e-3) & (ranges < self.max_range)
@@ -482,6 +484,12 @@ class TunnelTestMission(Node):
         return self.path[-1]
 
     def update(self):
+        if self.state not in ('wait', 'done') and (self.scan_time is None
+                                                   or self.now() - self.scan_time > 1.0):
+            # Nothing to see by (2026-10-27: a second lidar driver on the port starved ld_lidar,
+            # and the test waited silently in the tunnel).
+            self.get_logger().warn('Tunnel test: no /scan for over a second.',
+                                   throttle_duration_sec=2.0)
         if self.state == 'armed':
             if self.approach_speed > 0.0:
                 twist = Twist()
