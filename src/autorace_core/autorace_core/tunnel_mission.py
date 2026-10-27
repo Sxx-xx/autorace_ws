@@ -55,7 +55,9 @@ again, to twice the darkest it was over the last seconds.
     approach  square to the entry wall, through the entrance's middle, until
               the doorway has been passed and it is dark (approach_max metres
               at most: then the mission is skipped and the lane follower goes on)
-    drive     through the tunnel to the exit
+    turn      on the spot, to face the exit (45 deg to the left from the entrance)
+    drive     through the tunnel to the exit, along the straight line to it,
+              round whatever stands on it (A*)
     align     turn parallel to the exit's right wall
     leave     out along that wall, until it is light
 """
@@ -170,6 +172,11 @@ class TunnelMission(Node):
         self.declare_parameter('side_gain', 3.0)
         self.declare_parameter('leave_distance', 1.0)
         self.declare_parameter('active_timeout', 1.0)
+        # Once in and dark: turn on the spot to face the exit (45 deg left),
+        # within turn_tolerance, at most turn_timeout seconds, then drive.
+        self.declare_parameter('turn_rate', 0.8)
+        self.declare_parameter('turn_tolerance', 0.05)
+        self.declare_parameter('turn_timeout', 5.0)
         # The entry wall seen from outside: a straight run of returns across
         # the way, from ahead-left (the entrance is at its right end), within
         # front_wall_angle of square, at least front_wall_points returns over
@@ -225,6 +232,10 @@ class TunnelMission(Node):
         self.side_gain = value('side_gain')
         self.leave_distance = value('leave_distance')
         self.active_timeout = value('active_timeout')
+        self.turn_rate = value('turn_rate')
+        self.turn_tolerance = value('turn_tolerance')
+        self.turn_timeout = value('turn_timeout')
+        self.turn_start = 0.0
         self.front_wall_trigger = value('front_wall_trigger')
         self.front_wall_ahead = value('front_wall_ahead')
         self.front_wall_left = value('front_wall_left')
@@ -460,12 +471,13 @@ class TunnelMission(Node):
         for _ in range(3):
             self.align(self.in_tunnel(self.last_points))
         self.get_logger().info(
-            'Tunnel: at (%.2f, %.2f), heading %.0f deg off the tunnel, driving through.'
+            'Tunnel: at (%.2f, %.2f), heading %.0f deg off the tunnel; turning to face the exit.'
             % (self.pose[0], self.pose[1], math.degrees(-self.pose[2])))
         self.hits[:] = 0.0
         self.path = None
         self.light = False
-        self.phase = 'drive'
+        self.phase = 'turn'
+        self.turn_start = self.now()
 
     def callback_odom(self, msg):
         position = msg.pose.pose.position
@@ -558,7 +570,7 @@ class TunnelMission(Node):
             elif front is not None:
                 self.aim(front)     # while the wall is in view; then what it last said
             return
-        if self.phase not in ('drive', 'align'):
+        if self.phase not in ('turn', 'drive', 'align'):
             return
 
         inside = self.in_tunnel(points)
@@ -775,6 +787,19 @@ class TunnelMission(Node):
             self.phase = 'done'
             return
         twist = Twist()
+        if self.phase == 'turn':
+            bearing = math.atan2(self.left - 0.12 - y, self.exit_x - x)
+            error = wrap(bearing - heading)
+            if abs(error) < self.turn_tolerance or now - self.turn_start > self.turn_timeout:
+                self.get_logger().info(
+                    'Tunnel: facing the exit (%.0f deg, %s), driving through.'
+                    % (math.degrees(heading),
+                       'in time' if abs(error) < self.turn_tolerance else 'turn timed out'))
+                self.phase = 'drive'
+            else:
+                twist.angular.z = math.copysign(min(self.turn_rate, max(0.15, 2.0 * abs(error))), error)
+                self.pub_cmd_vel.publish(twist)
+                return
         if self.phase == 'drive':
             if abs(x - self.exit_x) < 0.10 and y > self.left - 0.25:
                 self.get_logger().info('Tunnel: at the exit, squaring up to its right wall.')
