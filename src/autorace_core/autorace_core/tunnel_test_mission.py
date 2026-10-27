@@ -16,6 +16,12 @@
 
 """Tunnel test: the laser alone, from inside the entrance to the far diagonal corner.
 
+Verified on the robot 2026-10-27 (fc45994), lane following in and out: front wall 0.57 m
+ahead -> in; dark (right wall 0.11 m) -> tunnel, origin 7 cm right of the middle; exit seen
+at (1.56, 1.74) before the goal (the tunnel is smaller than 1.8 m), re-measured to (1.49,
+1.76); there 2.4 s later, faced out, out 0.30 m and light (41 over 40): back to the lane,
+31 s from the front wall.
+
 A test of the tunnel's driving on its own, without the walls' reckoning of
 tunnel_mission. /autorace/run_active true starts it. The goal is the far
 diagonal corner, the exit, `goal_x` ahead and `goal_y` to the left of the
