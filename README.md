@@ -130,6 +130,7 @@ python3 tools/mission_marker.py & rviz2 -d tools/scan_view.rviz
 tools/lane_view.sh
 ros2 run rqt_image_view rqt_image_view /camera/image_projected
 python3 tools/lane_overlay.py          # 카메라 화면 위에 검출한 선을 그린다
+tools/lane_replay.sh bags/<bag> [시작초] [detect_lane 파라미터:=값 ...]   # bag 의 차선 카메라로 차선 검출만 돌림 (도메인 77)
 python3 tools/traffic_light_view.py    # 신호등 검출을 눈으로: 후보마다 통과/탈락 이유와 HSV, 클릭한 점의 HSV (Pi 카메라만 있으면 됨)
 ```
 

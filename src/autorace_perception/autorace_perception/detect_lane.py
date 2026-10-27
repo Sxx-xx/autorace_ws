@@ -237,6 +237,13 @@ class DetectLane(Node):
 
         self.declare_parameter('detect.min_pixels', 3000)
         self.declare_parameter('detect.max_line_width_m', 0.08)
+        # Glare on the yellow line comes out white (bright, no colour). White
+        # pixels lying in a gap in the yellow line no longer than this are
+        # counted as yellow and dropped from white; 0 turns it off.
+        self.declare_parameter('detect.glare_fill_m', 0.0)
+        # And white pixels this close beside the yellow line: the reflection
+        # runs along the tape's edge as well. 0 turns it off.
+        self.declare_parameter('detect.glare_edge_m', 0.0)
         # How much brighter than its surroundings a white line must be; 0 turns
         # the check off.
         self.declare_parameter('detect.white_contrast_min', 20)
@@ -302,6 +309,10 @@ class DetectLane(Node):
         self.blob_kernel_h = np.ones((1, max(3, blob_px)), np.uint8)
         self.blob_kernel_v = np.ones((max(3, blob_px), 1), np.uint8)
         self.contrast_kernel = np.ones((max(3, blob_px), max(3, blob_px)), np.uint8)
+        glare_px = int(self.get_parameter('detect.glare_fill_m').value * self.ppm)
+        self.glare_kernel = np.ones((glare_px, glare_px), np.uint8) if glare_px >= 3 else None
+        edge_px = int(2 * self.get_parameter('detect.glare_edge_m').value * self.ppm) | 1
+        self.glare_edge_kernel = np.ones((edge_px, edge_px), np.uint8) if edge_px >= 3 else None
         self.edge_kernel = np.ones((7, 7), np.uint8)
         self.white_contrast_min = self.get_parameter('detect.white_contrast_min').value
         self.min_line_px = self.get_parameter('detect.min_line_length_m').value * self.ppm
@@ -484,8 +495,23 @@ class DetectLane(Node):
         bright[outside > 0] = 0
         return bright
 
-    def mask_line(self, hsv, bounds, reliability, only=None):
+    def glare_on_yellow(self, hsv):
+        """White pixels in gaps of the yellow line: glare, to be read as yellow.
+
+        Closing the yellow mask bridges gaps up to glare_fill_m long; what the
+        bridge covers and is white by colour is the reflection off the tape.
+        """
+        yellow = cv2.inRange(hsv, self.yellow['lower'], self.yellow['upper'])
+        region = cv2.morphologyEx(yellow, cv2.MORPH_CLOSE, self.glare_kernel)
+        if self.glare_edge_kernel is not None:
+            region = cv2.bitwise_or(region, cv2.dilate(yellow, self.glare_edge_kernel))
+        white = cv2.inRange(hsv, self.white['lower'], self.white['upper'])
+        return cv2.bitwise_and(white, cv2.subtract(region, yellow))
+
+    def mask_line(self, hsv, bounds, reliability, only=None, extra=None):
         mask = cv2.inRange(hsv, bounds['lower'], bounds['upper'])
+        if extra is not None:
+            mask = cv2.bitwise_or(mask, extra)
         if only is not None:
             mask = cv2.bitwise_and(mask, only)
         mask = self.drop_blobs(mask)
@@ -690,11 +716,15 @@ class DetectLane(Node):
                 self.lookahead = lookahead
                 self.build_arc()
 
+        glare = self.glare_on_yellow(hsv) if self.glare_kernel is not None else None
+        white_only = self.thin_bright(hsv) if self.white_contrast_min > 0 else None
+        if glare is not None:
+            not_glare = cv2.bitwise_not(glare)
+            white_only = not_glare if white_only is None else cv2.bitwise_and(white_only, not_glare)
         yellow_pixels, yellow_mask, self.reliability_yellow = self.mask_line(
-            hsv, self.yellow, self.reliability_yellow)
+            hsv, self.yellow, self.reliability_yellow, extra=glare)
         white_pixels, white_mask, self.reliability_white = self.mask_line(
-            hsv, self.white, self.reliability_white,
-            only=self.thin_bright(hsv) if self.white_contrast_min > 0 else None)
+            hsv, self.white, self.reliability_white, only=white_only)
 
         self.pub_reliability_yellow.publish(UInt8(data=self.reliability_yellow))
         self.pub_reliability_white.publish(UInt8(data=self.reliability_white))

@@ -72,6 +72,10 @@ detect_lane:
       min_pixels: 800
       max_line_width_m: 0.08
       min_line_length_m: 0.06   # the speckled floor beyond the mat came through as white (2026-10-08)
+      # Glare on the yellow tape reads white: white pixels in a gap in the
+      # yellow line up to this long count as yellow instead (2026-10-27).
+      glare_fill_m: 0.05
+      glare_edge_m: 0.015       # and white within 1.5 cm beside the yellow line
       # TUNE: auto_threshold adapts the white threshold to the picture; keep
       # it on. The HSV bounds below are the sim's; check them with
       # /detect/image_lane on the real floor (black Formex is glossy).
