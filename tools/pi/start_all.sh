@@ -24,7 +24,8 @@ for n in ${*:-robot watchdog lidar cameras}; do
     # The base on its own too (start_all.sh robot, ld_lidar already up): its lidar driver comes
     # up a moment after the launch and then starves ld_lidar (2026-10-27: no /scan for the tunnel).
     # Once it has had the port, ld_lidar stays up but sends nothing until it is restarted.
-    for i in 1 2 3 4 5 6; do
+    # Up to 15 s: right after a boot the base comes up slowly (2026-10-27: past 6 s).
+    for i in $(seq 15); do
       if pgrep -f 'hls_lfcd_lds_driver/hlds_laser_publishe[r]|ld08_driver/ld08_drive[r]' > /dev/null; then
         kill_tb3_lidar
         restart_lidar=1     # whichever order, an ld_lidar already up has been starved
@@ -34,6 +35,10 @@ for n in ${*:-robot watchdog lidar cameras}; do
     done
   fi
 done
+# A last look, in case it came up while the others started.
+if pgrep -f 'hls_lfcd_lds_driver/hlds_laser_publishe[r]|ld08_driver/ld08_drive[r]' > /dev/null; then
+  kill_tb3_lidar; restart_lidar=1
+fi
 if [ -n "$restart_lidar" ] && [ -f lidar.pid ] && kill -0 $(cat lidar.pid) 2>/dev/null; then
   stop_pid lidar
   sleep 1
