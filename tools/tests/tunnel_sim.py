@@ -12,6 +12,8 @@ Scenarios named enter_* start outside, askew, with start_on: tunnel: a stand-in 
 follower drives the robot (0.12 m/s, back to the lane's middle) up to the tunnel's front wall,
 which hands it to the node; the camera goes dark once it is under the roof (5 cm ahead of the
 axle). enter_askew: the lane runs 6 cm left of the entrance's middle and 7 deg off square.
+enter_lane_lost: the lane ends 1.0 m short of the front wall and the stand-in searches as the
+lane controller does (0.05 m/s, turning 0.45 rad/s), as on the robot at 19:31 on 2026-10-27.
 """
 import math
 import os
@@ -25,6 +27,7 @@ import rclpy
 from sensor_msgs.msg import LaserScan
 from rclpy.parameter import Parameter
 from std_msgs.msg import Bool
+from std_msgs.msg import UInt8
 
 from autorace_core.tunnel_test_mission import TunnelTestMission
 
@@ -44,6 +47,7 @@ SCENARIOS = {
     'enter_empty': [],
     'enter_middle': [(0.50, 0.50)],
     'enter_askew': [],
+    'enter_lane_lost': [],
 }
 
 
@@ -134,6 +138,10 @@ def run(node, name, boxes, png_dir=None):
             # The lane follower's stand-in: on along the lane (y = 0), back to its middle.
             off = (y - lane_y - math.tan(lane_a) * x) * math.cos(lane_a)
             v, w = 0.12, -3.0 * off - 1.5 * math.atan2(math.sin(yaw - lane_a), math.cos(yaw - lane_a))
+            lost = name == 'enter_lane_lost' and x > -1.0
+            if lost:
+                v, w = 0.05, 0.45           # lane_controller's search
+            node.callback_lane_state(UInt8(data=0 if lost else 2))
         x += v * math.cos(yaw) * dt; y += v * math.sin(yaw) * dt; yaw += w * dt
         odom()
         if now - last_scan >= 1 / 8:

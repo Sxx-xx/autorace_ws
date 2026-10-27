@@ -109,6 +109,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
+from std_msgs.msg import UInt8
 
 from autorace_core.tunnel_mission import search
 from autorace_core.tunnel_mission import wrap
@@ -155,12 +156,18 @@ class TunnelTestMission(Node):
         # on entry_scans scans running. The entrance is at its right end, opening_half wide
         # to either side of its middle.
         self.declare_parameter('front_wall_trigger', True)
-        self.declare_parameter('front_wall_ahead', 0.90)
+        self.declare_parameter('front_wall_ahead', 1.20)
         self.declare_parameter('front_wall_left', 1.20)
         self.declare_parameter('front_wall_points', 20)
         self.declare_parameter('front_wall_span', 0.40)
         self.declare_parameter('front_wall_angle', 0.50)   # rad off square
-        self.declare_parameter('front_trigger', 0.60)      # m ahead
+        # 0.85 m: on the robot the wall was in view from 0.8-0.9 m on the runs that went in; at
+        # 0.6 m the lane had once ended before it, the lane controller had started turning on
+        # the spot to search, and the wall, first seen 15 deg askew, sent it past the entrance.
+        self.declare_parameter('front_trigger', 0.85)      # m ahead
+        # The lane lost (detect_lane: no line) while armed with the front wall in view at all:
+        # take over then, before the lane controller's search turns the robot away.
+        self.declare_parameter('lane_lost_takeover', True)
         self.declare_parameter('opening_half', 0.17)
         self.declare_parameter('approach_beyond', 0.30)    # m past the doorway to aim at
         self.declare_parameter('approach_speed', 0.10)   # m/s straight on into the tunnel
@@ -250,6 +257,7 @@ class TunnelTestMission(Node):
         self.front_wall_span = value('front_wall_span')
         self.front_wall_angle = value('front_wall_angle')
         self.front_trigger = value('front_trigger')
+        self.lane_lost_takeover = value('lane_lost_takeover')
         self.opening_half = value('opening_half')
         self.approach_beyond = value('approach_beyond')
         self.approach_max = value('approach_max')
@@ -308,6 +316,7 @@ class TunnelTestMission(Node):
         self.status_time = -math.inf
         self.brightness = None         # the forward camera's mean grey
         self.scan_time = None          # when the last scan came
+        self.lane_seen = -math.inf     # when detect_lane last had a line in view
         self.front_count = 0
         self.approach_from = None      # odometry (x, y) where the approach began
         self.approach_yaw = None       # odometry heading to hold: square to the front wall
@@ -319,6 +328,7 @@ class TunnelTestMission(Node):
         self.create_subscription(Odometry, '/odom', self.callback_odom, 10)
         self.create_subscription(LaserScan, '/scan', self.callback_scan, qos_profile_sensor_data)
         self.create_subscription(Bool, '/autorace/run_active', self.callback_run_active, 1)
+        self.create_subscription(UInt8, '/detect/lane_state', self.callback_lane_state, 1)
         if self.start_on == 'tunnel':
             self.create_subscription(CompressedImage, value('camera_topic'), self.callback_image,
                                      qos_profile_sensor_data)
@@ -349,6 +359,7 @@ class TunnelTestMission(Node):
     def callback_run_active(self, msg):
         if msg.data and self.state == 'wait' and self.odom is not None:
             self.hits[:] = 0.0
+            self.lane_seen = self.now()     # a lane lost before the start does not count
             self.start = self.pose = None
             self.exit_seen, self.exit_found = [], False
             self.goal = np.array([self.get_parameter('goal_x').value, self.get_parameter('goal_y').value])
@@ -364,6 +375,10 @@ class TunnelTestMission(Node):
             self.state = 'wait'
             self.pub_cmd_vel.publish(Twist())
             self.get_logger().info('Tunnel test: stopped (run_active false).')
+
+    def callback_lane_state(self, msg):
+        if msg.data != 0:
+            self.lane_seen = self.now()
 
     def callback_odom(self, msg):
         q = msg.pose.pose.orientation
@@ -474,11 +489,13 @@ class TunnelTestMission(Node):
                self.dark_threshold, show(front), show(wall)),
             throttle_duration_sec=1.0)
         if self.state == 'armed' and self.odom is not None:
-            near = front is not None and front[0] < self.front_trigger
+            lane_lost = self.lane_lost_takeover and self.now() - self.lane_seen > 0.3
+            near = front is not None and (front[0] < self.front_trigger or lane_lost)
             self.front_count = self.front_count + 1 if near else 0
             if self.front_count >= self.entry_scans and self.front_wall_trigger:
-                self.start_approach(front, 'front wall %.2f m ahead, %+.0f deg off square'
-                                    % (front[0], math.degrees(front[1])))
+                self.start_approach(front, 'front wall %.2f m ahead, %+.0f deg off square%s'
+                                    % (front[0], math.degrees(front[1]),
+                                       ' (lane lost)' if front[0] >= self.front_trigger else ''))
             elif not self.front_wall_trigger and self.approach_speed > 0.0:
                 self.start_approach(None, 'straight on')
         elif self.state == 'approach' and front is not None and self.odom is not None:

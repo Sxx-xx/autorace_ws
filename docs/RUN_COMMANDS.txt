@@ -148,7 +148,7 @@ python3 tools/estop.py
 ros2 launch autorace_bringup lane_drive.launch.py camera_topic:=/camera/image_raw \
   camera_info_topic:=/camera/camera_info lane_stats:=true extra_params:=$(pwd)/tools/drive_test_picam.yaml
 # [노트북 터미널 3] 터널 (A*): 차선 주행이 터널 앞까지 몰고 간다. 앞 왼쪽에 진행 방향과 수직인
-#   정면 벽(입구는 그 오른쪽 끝, 차선과 일직선)이 0.6 m 안에 보이면 넘겨받아 그 벽에 수직으로
+#   정면 벽(입구는 그 오른쪽 끝, 차선과 일직선)이 0.85 m 안에 보이면 (차선을 놓쳤으면 1.2 m 안) 넘겨받아 그 벽에 수직으로
 #   입구 가운데를 지나 직진, 오른쪽 벽 + 어두움(dark_threshold 이하)이면 터널 미션 시작:
 #   대각선 끝(1.8, 1.8 m)을 향해 A* 로 장애물을 피해 간다. 가는 중에 왼쪽 벽의 빈 곳(출구,
 #   25~45 cm, 1.2 m 안, 3번 연속)이 보이면 목표를 출구 바로 안으로 바꾼다. 목표에 닿으면 왼쪽으로
@@ -183,6 +183,14 @@ ssh dd@172.20.10.4 '~/stop_all.sh'
   같은 토픽이라 레이스와 동시에 띄우지 않는다.
     ros2 run autorace_core custom_teleop
     ros2 run autorace_core level_crossing_test
+- 라이다 드라이버 중복 (2026-10-27): turtlebot3_bringup 의 robot.launch.py 가 LDS-01 드라이버
+  (hlds_laser_publisher) 를 같이 띄운다. 이 로봇은 LDS-02 라서 우리 ld_lidar 가 /dev/ttyUSB0 을
+  읽는데, 둘이 같은 포트를 열면 /scan 이 끊긴다 (ld_lidar 는 살아 있지만 아무것도 안 낸다,
+  중복 드라이버를 꺼도 ld_lidar 를 다시 켜야 돌아온다). start_all.sh 가 베이스를 켤 때 최대 15 초
+  지켜보다 끄고, 마지막에 한 번 더 보고, ld_lidar 를 다시 켠다. 그래도 생기면:
+    ros2 topic hz /scan                          # no data 면 의심
+    ros2 topic info /scan                        # Publisher count 2 면 중복
+    ssh dd@172.20.10.4 'pkill -f hlds_laser_publisher; ~/start_all.sh lidar'
 - Pi 의 ~/start_*.sh 는 ~/autorace_ws/tools/pi/ 를 가리키는 심볼릭 링크다. 스크립트는 저장소에서만 고친다.
   (예전 사본은 Pi 의 ~/pi_home_backup_2026-10-20/ 에 있다)
 - Pi 에서 직접 고쳤던 내용은 Pi 의 pi-local-2026-10-20 브랜치에 보존했고 real-review 에 합쳤다.
