@@ -34,6 +34,7 @@ setup(
             'start_button = autorace_core.start_button:main',
             'traffic_light_mission = autorace_core.traffic_light_mission:main',
             'tunnel_mission = autorace_core.tunnel_mission:main',
+            'tunnel_test_mission = autorace_core.tunnel_test_mission:main',
         ],
     },
 )

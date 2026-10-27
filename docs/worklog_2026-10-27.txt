@@ -265,6 +265,12 @@ roi_top 같은 비율 값은 그대로. **아직 주행으로 확인하지 않�
       (swing_lead 0.14)에 80°(bay_turn_angle), 후진 후 회전 자리 통로 가운데 2 cm 앞. 칸 회전이
       중심선 14 cm 앞이라 비뚤게 들어가면 bay_station 을 0.18 쯤으로 같이 내릴 것. 카메라 좌우
       기준(camera.lateral_offset, tools/lane_center_check.py)은 아직 안 잼.
+  (10) github 의 tunnel_lane 브랜치에서 터널 부분만 가져옴 (차선 쪽 변경은 뺌): tunnel_mission.py (라이다로
+      1.74 m 상자, 입구 오른쪽 벽에서 0.18, 출구 왼쪽 벽 1.56, 장애물은 A* 우회, Pi 카메라의 어두움/밝음으로
+      시작·끝), tunnel_test_mission.py 와 tools/tests/tunnel_sim.py, tools/tunnel_test.rviz, yaml 의
+      tunnel_mission 값, race.launch 에서 터널 노드의 /camera/image_raw 를 표지판 카메라(디코드된 것)로 remap,
+      lane_controller 의 /control/lane_resume (터널 노드가 주행을 돌려줄 때 차선 찾기를 처음부터). 가상
+      시험 enter_askew 통과(33 s, 벽까지 13 cm). 실물 터널은 아직 없음.
   (4) 빈 주행의 커브에서 덜 돌고 나와 좌우로 흔들림. 명령 각속도가 cornering_rate 0.6 에 걸려
       있고 실제도 0.52~0.58 로 따라오므로, 로봇이 못 도는 게 아니라 한도가 낮은 것. →
       cornering_rate 0.6 → 0.8 (perception_real.yaml). 흔들림(슬라럼)은 커브 끝의 경로/카메라

@@ -87,10 +87,11 @@ def launch_setup(context):
             output='screen', parameters=[param_file, sim_time], remappings=remappings,
         )
 
-    def mission(executable, extra=None):
+    def mission(executable, extra=None, remappings=None):
         return Node(
             package='autorace_core', executable=executable, name=executable,
             output='screen', parameters=[params, sim_time] + ([extra] if extra else []),
+            remappings=remappings or [],
         )
 
     nodes.append(perception('detect_sign', sign_input))
@@ -112,8 +113,10 @@ def launch_setup(context):
     nodes.append(mission('mission_manager', manager_overrides))
 
     for name in ('traffic_light_mission', 'intersection_mission', 'construction_mission',
-                 'parking_mission', 'level_crossing_mission', 'tunnel_mission'):
+                 'parking_mission', 'level_crossing_mission'):
         nodes.append(mission(name))
+    # The tunnel goes by the forward camera's brightness, as the signs see it.
+    nodes.append(mission('tunnel_mission', remappings=[('/camera/image_raw', sign_camera)]))
     return nodes
 
 

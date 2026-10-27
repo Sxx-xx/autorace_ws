@@ -169,11 +169,24 @@ level_crossing_mission:
 
 tunnel_mission:
   ros__parameters:
-    inside: 1.86
+    # From the tunnel_lane branch (2026-10-27): 1.74 m inside; the entrance
+    # 0.18 m from the right wall and the exit as far from the far wall, in
+    # the left one: 45 degrees ahead to the left.
+    inside: 1.74
     entrance_right: 0.18
-    exit_x: 1.68
+    exit_x: 1.56
     speed: 0.18
     cornering_rate: 1.0
+    # The body as a circle about the wheel axle: the A* keeps at least this
+    # far from walls and obstacles, and further up to comfort_clearance. 0.13
+    # covers the Burger (138 x 178 mm) turning on the spot; measure again if a
+    # camera mount sticks out further.
+    robot_radius: 0.13
+    comfort_clearance: 0.25
+    # The forward camera going dark starts the mission, light again ends it
+    # (TUNE at the venue: the log prints the brightness on both).
+    dark_ratio: 0.5
+    bright_ratio: 2.0
 
 # ---- forward camera detectors (TUNE under the venue's lights) ----
 # Watch /detect/image_sign, /detect/image_traffic_light,

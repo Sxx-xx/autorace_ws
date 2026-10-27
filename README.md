@@ -115,6 +115,13 @@ ros2 topic pub -r 5 /autorace/run_active std_msgs/msg/Bool "{data: true}"   # �
 ros2 launch autorace_bringup race.launch.py
 ros2 launch autorace_bringup race.launch.py auto_start:=true missions:=construction,parking
 
+# 터널만 (tunnel_lane 브랜치에서 가져온 것, 10/27). 로봇을 입구 0.5 m 앞 차선 위에 두면 차선 주행으로
+# 들어가다 Pi 카메라가 어두워지면 터널 미션이 시작되고, 밝아지면 끝난다 (dark_ratio / bright_ratio 는 현장에서).
+ros2 launch autorace_bringup race.launch.py missions:=tunnel auto_start:=true
+# 터널 노드 혼자 시험 (레이스 없이; 바퀴 축을 입구 면에 두고). 화면은 rviz2 -d tools/tunnel_test.rviz,
+# 로봇 없이 가상 시험은 python3 tools/tests/tunnel_sim.py
+ros2 run autorace_core tunnel_test_mission
+
 # 비상 정지 창 (Enter 로 정지) / RViz 에 라이다·미션 상태
 python3 tools/estop.py
 python3 tools/mission_marker.py & rviz2 -d tools/scan_view.rviz

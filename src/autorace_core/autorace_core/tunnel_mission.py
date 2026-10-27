@@ -16,35 +16,40 @@
 
 """Tunnel mission: through the dark, walled square from its entrance to its exit.
 
-The tunnel is a square room with an opening in two of its walls and a few
-obstacles standing inside, wherever the organisers put them. There are no
-lines on its floor and no light, so the lane camera is of no use; the laser
-is what the robot has, and the walls are what it steers by.
+The tunnel is a square room, 1.74 m inside, roofed, with the entrance in the
+wall the robot comes in by, near its right end, and the exit in the left
+wall, near its far end: from the entrance, the exit is ahead and to the left
+at about 45 degrees. A few obstacles stand inside, wherever the organisers
+put them. There are no lines on its floor and no light, so the lane camera is
+of no use; the laser is what the robot has, and the walls are what it steers by.
 
-Entering, the robot passes between the two ends of the wall, 15 cm to either
-side, with walls all round ahead of it: nearly every beam of the front sector
-of the scan comes back from within a couple of metres, where in the open
-most are lost. The two together, with the wall ends still a little way
-ahead, are what start the mission: early enough that the lane follower, which
-loses its lines at the wall, has not yet begun to cast about. The wall ends
-alone would also fit passing between two obstacles in the construction
-zone. The robot may come through the doorway askew, so which way the tunnel
-runs is read off the walls in that first scan, not taken from the heading.
-From that moment the robot keeps its own reckoning of where it is in the
-tunnel, from the odometry, and corrects it
-on every scan against the four walls: each wall's returns say how far off
-the reckoning is across that wall, and which way they run says how far off
-it is in heading.
+The lane follower drives the robot in. On the way the laser sees it pass
+between the two ends of the entry wall, 15 cm to either side, with walls all
+round ahead of it, and the robot's place in the tunnel is taken from that
+scan: the wall ends say where it is, the walls which way it is heading (it
+may come in askew). From then on the odometry carries that place along. The
+mission itself starts when the forward camera goes dark: its picture's
+brightness falls to half of the brightest it was over the last seconds. Dark
+without the doorway (a shadow, a hand over the camera) starts nothing.
 
-The returns are also counted in a grid, as the construction mission counts
-them, and the walls drawn in; and across that grid a path is searched (A*)
-from the robot to just inside the exit, every scan, keeping clear of
-everything by the robot's radius and further where there is room. The robot
-steers for a point a little way along it, and once in the exit drives
-straight out until the lane follower has a lane again.
+Inside, the reckoning is corrected on every scan against the four walls:
+each wall's returns say how far off it is across that wall, and which way
+they run says how far off it is in heading. The returns are also counted in a
+grid, as the construction mission counts them, and the walls drawn in; and
+across that grid a path is searched (A*) from the robot to just inside the
+exit, every scan, keeping clear of everything by the robot's radius and
+further where there is room. The robot steers for a point a little way along
+it.
+
+At the exit the robot turns on the spot until it lies parallel to the wall on
+its right as it faces out (the far wall, running on past the exit as the
+exit's right side), measured off the laser rather than the reckoning. It then
+drives out along that wall, and the mission is done when the camera brightens
+again, to twice the darkest it was over the last seconds.
 
     drive   through the tunnel to the exit
-    leave   out through the exit
+    align   turn parallel to the exit's right wall
+    leave   out along that wall, until it is light
 """
 
 from collections import deque
@@ -52,12 +57,13 @@ import heapq
 import math
 
 import cv2
-from geometry_msgs.msg import PointStamped
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import Image
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
 from std_msgs.msg import String
@@ -114,18 +120,28 @@ class TunnelMission(Node):
         # The tunnel, as seen from its entrance: x into it, y to the left.
         # Across the inside from wall to wall; from the middle of the
         # entrance to the wall on the right; along the entry wall from the
-        # entrance to the exit, which is in the left wall.
-        self.declare_parameter('inside', 1.86)
+        # entrance to the exit, which is in the left wall. With the openings
+        # as far from their corners as each other, the exit is at
+        # (exit_x, inside - entrance_right): 45 degrees to the left.
+        self.declare_parameter('inside', 1.74)
         self.declare_parameter('entrance_right', 0.18)
-        self.declare_parameter('exit_x', 1.68)
+        self.declare_parameter('exit_x', 1.56)
         self.declare_parameter('opening_width', 0.34)
         # Wall ends this near on both sides, up to this far ahead, with at
         # least this share of the beams within 60 degrees of straight ahead
         # returning from within 2.5 m (and 60 % of the whole front half),
-        # mean the entrance.
+        # mean the entrance. Forgotten again this far on, if it never got dark.
         self.declare_parameter('doorway_half_width', 0.22)
         self.declare_parameter('doorway_ahead', 0.30)
         self.declare_parameter('enclosed_fraction', 0.7)
+        self.declare_parameter('doorway_memory', 1.0)
+        # The forward camera's brightness: dark below dark_ratio of the
+        # brightest over the last light_window seconds, light again above
+        # bright_ratio of the darkest, for light_frames frames in a row.
+        self.declare_parameter('dark_ratio', 0.5)
+        self.declare_parameter('bright_ratio', 2.0)
+        self.declare_parameter('light_window', 3.0)
+        self.declare_parameter('light_frames', 3)
         # Room to keep from walls and obstacles, and the room it likes.
         self.declare_parameter('robot_radius', 0.13)
         self.declare_parameter('comfort_clearance', 0.25)
@@ -136,8 +152,15 @@ class TunnelMission(Node):
         self.declare_parameter('cornering_rate', 0.8)
         self.declare_parameter('max_angular', 1.2)
         self.declare_parameter('lookahead', 0.15)
-        # Driven straight out of the exit at most, looking for a lane.
-        self.declare_parameter('leave_distance', 0.6)
+        # Square to the exit's right wall within this, or go after this long.
+        self.declare_parameter('align_tolerance', 0.05)
+        self.declare_parameter('align_timeout', 4.0)
+        # Out along that wall: how hard to turn for its angle and for the
+        # distance off it, and at most this far if it never gets light.
+        self.declare_parameter('leave_speed', 0.10)
+        self.declare_parameter('wall_gain', 2.0)
+        self.declare_parameter('side_gain', 3.0)
+        self.declare_parameter('leave_distance', 1.0)
         self.declare_parameter('active_timeout', 1.0)
 
         def value(name):
@@ -151,6 +174,11 @@ class TunnelMission(Node):
         self.doorway = value('doorway_half_width')
         self.doorway_ahead = value('doorway_ahead')
         self.enclosed_fraction = value('enclosed_fraction')
+        self.doorway_memory = value('doorway_memory')
+        self.dark_ratio = value('dark_ratio')
+        self.bright_ratio = value('bright_ratio')
+        self.light_window = value('light_window')
+        self.light_frames = value('light_frames')
         self.robot_radius = value('robot_radius')
         self.comfort = value('comfort_clearance')
         self.lidar_offset = value('lidar_offset')
@@ -160,6 +188,11 @@ class TunnelMission(Node):
         self.cornering_rate = value('cornering_rate')
         self.max_angular = value('max_angular')
         self.lookahead = value('lookahead')
+        self.align_tolerance = value('align_tolerance')
+        self.align_timeout = value('align_timeout')
+        self.leave_speed = value('leave_speed')
+        self.wall_gain = value('wall_gain')
+        self.side_gain = value('side_gain')
         self.leave_distance = value('leave_distance')
         self.active_timeout = value('active_timeout')
 
@@ -174,24 +207,30 @@ class TunnelMission(Node):
 
         self.phase = None           # None while the mission is not running
         self.active_time = 0.0
-        self.odometry = deque(maxlen=400)
         self.doorway_count = 0      # scans in a row between the wall ends
-        self.doorway_sides = (0.0, 0.0)
-        self.doorway_distance = 0.0  # from the axle to the wall ends
+        self.doorway_travelled = 0.0  # self.travelled when last in the doorway
         self.last_points = None     # the latest scan, in the robot frame
-        self.pose = None            # x, y, heading in the tunnel
+        self.pose = None            # x, y, heading in the tunnel, from the doorway on
         self.odom_pose = None       # the odometry pose the above was taken from
         self.path = None
         self.planned_time = 0.0
+        self.levels = deque()       # (time, brightness) over the last light_window
+        self.dark_count = 0
+        self.bright_count = 0
+        self.light = False          # bright again, out of the tunnel
+        self.announced = False      # the dark entrance logged
+        self.align_start = 0.0
+        self.square_count = 0
         self.leave_from = None
-        self.lane_time = 0.0
         self.travelled = 0.0
 
         self.create_subscription(
             Bool, '/autorace/mission/tunnel/active', self.callback_active, 1)
         self.create_subscription(Odometry, '/odom', self.callback_odom, 1)
         self.create_subscription(LaserScan, '/scan', self.callback_scan, 1)
-        self.create_subscription(PointStamped, '/detect/lane_target', self.callback_lane, 1)
+        # The forward camera; race.launch.py remaps this to the decoded stream.
+        self.create_subscription(
+            Image, '/camera/image_raw', self.callback_image, qos_profile_sensor_data)
         self.pub_cmd_vel = self.create_publisher(Twist, '/cmd_vel/mission', 1)
         self.pub_done = self.create_publisher(Bool, '/autorace/mission/tunnel/done', 1)
         self.pub_trigger = self.create_publisher(String, '/autorace/trigger', 5)
@@ -282,6 +321,23 @@ class TunnelMission(Node):
             heading = wrap(heading - 0.5 * float(np.mean(turn)))
         self.pose = (x, y, heading)
 
+    def right_wall(self):
+        """The wall on the robot's right, from the laser: its angle and distance, or None.
+
+        The angle is the wall's direction against the robot's heading, positive
+        when the wall comes nearer ahead (the robot is turned towards it).
+        """
+        points = self.last_points
+        if points is None:
+            return None
+        near = points[(points[:, 1] < -0.05) & (points[:, 1] > -0.40)
+                      & (points[:, 0] > -0.25) & (points[:, 0] < 0.35)]
+        if len(near) < 10 or np.ptp(near[:, 0]) < 0.2:
+            return None
+        slope, offset = np.polyfit(near[:, 0], near[:, 1], 1)
+        angle = math.atan(slope)
+        return angle, -offset * math.cos(angle)
+
     def occupied(self):
         """Cells with an obstacle in them: the walls, and what the laser keeps hitting."""
         peak = cv2.dilate(self.hits, np.ones((7, 7), np.uint8))
@@ -319,46 +375,87 @@ class TunnelMission(Node):
     def callback_active(self, msg):
         if msg.data:
             self.active_time = self.now()
-            if (self.phase is None and self.odom_pose is not None
-                    and self.last_points is not None):
-                left, right = self.doorway_sides
-                # In the doorway: the entry wall is here, the entrance's
-                # middle is between the two wall ends, and the walls say
-                # which way the tunnel runs from here.
-                self.pose = (-self.doorway_distance, (right - left) / 2.0, 0.0)
-                self.pose = (self.pose[0], self.pose[1], self.first_heading())
+            if self.phase is None:
+                if self.pose is None or self.last_points is None:
+                    # Started some other way than by the dark doorway: with
+                    # no place in the tunnel, better the lane follower.
+                    self.get_logger().error(
+                        'Tunnel: activated without having passed the entrance, giving up.')
+                    self.phase = 'done'
+                    return
                 for _ in range(3):
                     self.align(self.in_tunnel(self.last_points))
                 self.get_logger().info(
-                    'Tunnel: heading %.0f deg off the tunnel at the entrance.'
-                    % math.degrees(-self.pose[2]))
+                    'Tunnel: at (%.2f, %.2f), heading %.0f deg off the tunnel, driving through.'
+                    % (self.pose[0], self.pose[1], math.degrees(-self.pose[2])))
                 self.hits[:] = 0.0
                 self.path = None
-                self.get_logger().info('Tunnel: in the entrance, driving through.')
+                self.light = False
                 self.phase = 'drive'
         elif self.phase is not None:
             self.get_logger().info(f'Tunnel: deactivated during {self.phase}.')
             self.phase = None
+            self.pose = None
+            self.announced = False
 
     def callback_odom(self, msg):
         position = msg.pose.pose.position
         q = msg.pose.pose.orientation
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
         here = (position.x, position.y, yaw)
-        if self.pose is not None and self.odom_pose is not None:
-            # Move the tunnel pose on by what the odometry moved.
+        if self.odom_pose is not None:
             dx, dy = here[0] - self.odom_pose[0], here[1] - self.odom_pose[1]
-            ahead = math.cos(self.odom_pose[2]) * dx + math.sin(self.odom_pose[2]) * dy
-            left = -math.sin(self.odom_pose[2]) * dx + math.cos(self.odom_pose[2]) * dy
-            x, y, heading = self.pose
-            self.pose = (x + math.cos(heading) * ahead - math.sin(heading) * left,
-                         y + math.sin(heading) * ahead + math.cos(heading) * left,
-                         wrap(heading + wrap(here[2] - self.odom_pose[2])))
             self.travelled += math.hypot(dx, dy)
+            if self.pose is not None:
+                # Move the tunnel pose on by what the odometry moved.
+                ahead = math.cos(self.odom_pose[2]) * dx + math.sin(self.odom_pose[2]) * dy
+                left = -math.sin(self.odom_pose[2]) * dx + math.cos(self.odom_pose[2]) * dy
+                x, y, heading = self.pose
+                self.pose = (x + math.cos(heading) * ahead - math.sin(heading) * left,
+                             y + math.sin(heading) * ahead + math.cos(heading) * left,
+                             wrap(heading + wrap(here[2] - self.odom_pose[2])))
         self.odom_pose = here
 
-    def callback_lane(self, msg):
-        self.lane_time = self.now()
+    def callback_image(self, msg):
+        data = np.frombuffer(msg.data, np.uint8)
+        if not msg.height or data.size != msg.height * msg.step:
+            return
+        # Every eighth row is plenty for the mean, and costs next to nothing.
+        rows = data.reshape(msg.height, msg.step)
+        level = float(rows[::8].mean())
+        now = self.now()
+        self.levels.append((now, level))
+        while self.levels and now - self.levels[0][0] > self.light_window:
+            self.levels.popleft()
+
+        if self.phase is None:
+            brightest = max(v for _, v in self.levels)
+            self.dark_count = self.dark_count + 1 if level < self.dark_ratio * brightest else 0
+            if self.dark_count < self.light_frames:
+                return
+            if self.pose is None:
+                self.get_logger().warn(
+                    'Tunnel: dark (%.0f of %.0f) but no entrance seen, not starting.'
+                    % (level, brightest), throttle_duration_sec=2.0)
+                return
+            if not self.announced:
+                self.announced = True
+                self.get_logger().info(
+                    'Tunnel: dark (%.0f of %.0f) past the entrance, entering.'
+                    % (level, brightest))
+            # The manager takes this only while lane following, and once.
+            self.pub_trigger.publish(String(data='tunnel'))
+        elif self.phase == 'leave':
+            darkest = min(v for _, v in self.levels)
+            bright = level > self.bright_ratio * max(darkest, 1.0)
+            self.bright_count = self.bright_count + 1 if bright else 0
+            if self.bright_count >= self.light_frames and not self.light:
+                self.light = True
+                self.get_logger().info(
+                    'Tunnel: light again (%.0f, from %.0f).' % (level, darkest))
+        else:
+            self.dark_count = 0
+            self.bright_count = 0
 
     def callback_scan(self, msg):
         ranges = np.asarray(msg.ranges, dtype=np.float32)
@@ -368,31 +465,16 @@ class TunnelMission(Node):
                            ranges[seen] * np.sin(angles[seen])], axis=1)
         self.last_points = points
 
-        # Wall ends to both sides, level with the robot or a little ahead.
-        beside = (points[:, 0] > -0.12) & (points[:, 0] < self.doorway_ahead)
-        left = points[beside & (points[:, 1] > 0.08) & (points[:, 1] < self.doorway)]
-        right = points[beside & (points[:, 1] < -0.08) & (points[:, 1] > -self.doorway)]
-        sector = np.cos(angles) > 0.5
-        half = np.cos(angles) > 0.0
-        enclosed = np.mean(seen[sector] & (ranges[sector] < 2.5))
-        enclosed_half = np.mean(seen[half] & (ranges[half] < 2.5))
-        if (len(left) >= 3 and len(right) >= 3 and enclosed >= self.enclosed_fraction
-                and enclosed_half >= 0.6):
-            self.doorway_count += 1
-            self.doorway_sides = (float(np.median(left[:, 1])), float(-np.median(right[:, 1])))
-            self.doorway_distance = float(np.median(np.concatenate([left[:, 0], right[:, 0]])))
-        else:
-            self.doorway_count = 0
         if self.phase is None:
-            if self.doorway_count >= 2:
-                # The manager takes this only while lane following, and once.
-                self.pub_trigger.publish(String(data='tunnel'))
+            self.watch_doorway(points, ranges, angles, seen)
             return
-        if self.phase != 'drive':
+        if self.phase not in ('drive', 'align'):
             return
 
         inside = self.in_tunnel(points)
         self.align(inside)
+        if self.phase != 'drive':
+            return
         inside = self.in_tunnel(points)
         column = np.int_(np.round((inside[:, 0] - self.x_0) / RES))
         row = np.int_(np.round((inside[:, 1] - self.y_0) / RES))
@@ -406,6 +488,39 @@ class TunnelMission(Node):
             if self.path is None:
                 self.get_logger().warn('Tunnel: no way to the exit found.',
                                        throttle_duration_sec=2.0)
+
+    def watch_doorway(self, points, ranges, angles, seen):
+        """Take the robot's place in the tunnel while it passes between the wall ends."""
+        # Wall ends to both sides, level with the robot or a little ahead.
+        beside = (points[:, 0] > -0.12) & (points[:, 0] < self.doorway_ahead)
+        left = points[beside & (points[:, 1] > 0.08) & (points[:, 1] < self.doorway)]
+        right = points[beside & (points[:, 1] < -0.08) & (points[:, 1] > -self.doorway)]
+        sector = np.cos(angles) > 0.5
+        half = np.cos(angles) > 0.0
+        enclosed = np.mean(seen[sector] & (ranges[sector] < 2.5))
+        enclosed_half = np.mean(seen[half] & (ranges[half] < 2.5))
+        if (len(left) >= 3 and len(right) >= 3 and enclosed >= self.enclosed_fraction
+                and enclosed_half >= 0.6):
+            self.doorway_count += 1
+        else:
+            self.doorway_count = 0
+        if self.doorway_count >= 2:
+            # In the doorway: the entry wall is here, the entrance's middle is
+            # between the two wall ends, and the walls say which way the
+            # tunnel runs from here. The latest such scan, the deepest in.
+            side_left = float(np.median(left[:, 1]))
+            side_right = float(-np.median(right[:, 1]))
+            distance = float(np.median(np.concatenate([left[:, 0], right[:, 0]])))
+            self.pose = (-distance, (side_right - side_left) / 2.0, 0.0)
+            self.pose = (self.pose[0], self.pose[1], self.first_heading())
+            for _ in range(3):
+                self.align(self.in_tunnel(points))
+            self.doorway_travelled = self.travelled
+        elif (self.pose is not None
+              and self.travelled - self.doorway_travelled > self.doorway_memory):
+            # Through a doorway that never went dark: not the tunnel.
+            self.pose = None
+            self.announced = False
 
     # --- driving ---------------------------------------------------------
 
@@ -428,45 +543,103 @@ class TunnelMission(Node):
         twist.angular.z = max(-self.max_angular, min(self.max_angular, speed * curvature))
         return twist
 
+    def turn_square(self):
+        """Turn on the spot until parallel to the exit's right wall; True once there."""
+        twist = Twist()
+        # Facing out of the exit is +90 degrees in the tunnel. Far from it,
+        # turn by the reckoning; near it, by the wall itself.
+        error = wrap(math.pi / 2.0 - self.pose[2])
+        wall = self.right_wall() if abs(error) < 0.3 else None
+        if wall is None:
+            self.square_count = 0
+            twist.angular.z = max(-self.cornering_rate, min(self.cornering_rate, 2.0 * error))
+            return twist, False
+        angle = wall[0]
+        if abs(angle) < self.align_tolerance:
+            self.square_count += 1
+            return twist, self.square_count >= 3
+        self.square_count = 0
+        # At least enough to move the wheels at all.
+        rate = max(0.15, min(0.6, 2.5 * abs(angle)))
+        twist.angular.z = math.copysign(rate, angle)
+        return twist, False
+
+    def follow_right_wall(self):
+        """Drive out along the wall on the right, the exit's half width off it."""
+        twist = Twist()
+        twist.linear.x = self.leave_speed
+        wall = self.right_wall()
+        if wall is None:
+            # Past its end: straight on, out of the exit, by the reckoning.
+            x, y, _ = self.pose
+            twist = self.steer_to((x, y + 0.3))
+            twist.linear.x = min(twist.linear.x, self.leave_speed)
+            return twist
+        angle, distance = wall
+        turn = self.wall_gain * angle - self.side_gain * (distance - self.opening / 2.0)
+        twist.angular.z = max(-self.cornering_rate, min(self.cornering_rate, turn))
+        return twist
+
     def update(self):
-        if self.phase is None or self.pose is None:
+        if self.phase is None:
             return
         now = self.now()
         if now - self.active_time > self.active_timeout:
             self.get_logger().info(f'Tunnel: activation lapsed during {self.phase}.')
             self.phase = None
+            self.pose = None
             return
         if self.phase == 'done':
             self.pub_done.publish(Bool(data=True))
             return
+        if self.pose is None:
+            return
 
         x, y, heading = self.pose
-        if not (-0.3 < x < self.inside + 0.3 and self.right - 0.3 < y < self.left + 0.6):
+        if self.phase != 'leave' and not (-0.3 < x < self.inside + 0.3
+                                          and self.right - 0.3 < y < self.left + 0.6):
             # Not in the tunnel after all: better the lane follower than this.
             self.get_logger().error('Tunnel: the reckoning has left the tunnel, giving up.')
             self.phase = 'done'
             return
         twist = Twist()
         if self.phase == 'drive':
-            if abs(x - self.exit_x) < 0.08 and y > self.left - 0.2:
-                self.get_logger().info('Tunnel: at the exit, leaving.')
-                self.phase = 'leave'
-                self.leave_from = self.travelled
+            if abs(x - self.exit_x) < 0.10 and y > self.left - 0.25:
+                self.get_logger().info('Tunnel: at the exit, squaring up to its right wall.')
+                self.phase = 'align'
+                self.align_start = now
+                self.square_count = 0
             elif self.path is not None and len(self.path) > 1:
                 distance = np.hypot(self.path[:, 0] - x, self.path[:, 1] - y)
                 index = int(np.argmax(distance >= self.lookahead))
                 if distance[index] < self.lookahead:
                     index = len(self.path) - 1
                 twist = self.steer_to(self.path[index])
+        if self.phase == 'align':
+            twist, square = self.turn_square()
+            late = now - self.align_start > self.align_timeout
+            if square or late:
+                if late:
+                    self.get_logger().warn(
+                        'Tunnel: not square to the wall in time, leaving anyway.')
+                else:
+                    self.get_logger().info('Tunnel: square to the wall, leaving.')
+                self.phase = 'leave'
+                self.leave_from = self.travelled
+                self.bright_count = 0
+                self.light = False
+                twist = Twist()
         if self.phase == 'leave':
-            # Straight out through the exit, square to the wall.
-            twist = self.steer_to((self.exit_x, y + 0.3))
-            out = y > self.left + 0.15
-            if (out and now - self.lane_time < 0.3) \
-                    or self.travelled - self.leave_from > self.leave_distance:
+            if self.light:
                 self.get_logger().info('Tunnel: out, done.')
                 self.phase = 'done'
                 return
+            if self.travelled - self.leave_from > self.leave_distance:
+                self.get_logger().warn('Tunnel: never got light, done after %.1f m.'
+                                       % self.leave_distance)
+                self.phase = 'done'
+                return
+            twist = self.follow_right_wall()
         self.pub_cmd_vel.publish(twist)
 
 
