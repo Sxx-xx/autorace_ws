@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """traffic_light_view.py : watch the traffic light detector decide, by eye.
 
 Needs only the Pi's forward camera (~/start_all.sh on the Pi); no race launch.
