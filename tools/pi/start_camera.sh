@@ -5,4 +5,4 @@
 source /opt/ros/jazzy/setup.bash
 export ROS_DOMAIN_ID=30
 exec python3 $HOME/csi_camera.py --ros-args -r __ns:=/camera -p v4l2_name:=camera0 \
-  -p width:=320 -p height:=240 -p fps:=30 -p frame_id:=camera_link
+  -p width:=640 -p height:=480 -p fps:=15 -p frame_id:=camera_link

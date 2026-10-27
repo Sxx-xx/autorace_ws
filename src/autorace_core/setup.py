@@ -31,6 +31,7 @@ setup(
             'level_crossing_mission = autorace_core.level_crossing_mission:main',
             'mission_manager = autorace_core.mission_manager:main',
             'parking_mission = autorace_core.parking_mission:main',
+            'start_button = autorace_core.start_button:main',
             'traffic_light_mission = autorace_core.traffic_light_mission:main',
             'tunnel_mission = autorace_core.tunnel_mission:main',
         ],

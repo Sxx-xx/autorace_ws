@@ -64,6 +64,10 @@ parking_mission:
     turn_rate: 1.0
     # Out of the bay as soon as it is in.
     park_time: 0.0
+    # The middle of the lane to the lot, past the end of the road's left
+    # yellow line. With 0.15 the turn in ended 5-7 cm right of the lane's
+    # middle in two runs (2026-10-27).
+    entrance_gap_half: 0.19
 
 level_crossing_mission:
   ros__parameters:
@@ -89,6 +93,10 @@ tunnel_mission:
 # ---- forward camera detectors (TUNE under the venue's lights) ----
 # Watch /detect/image_sign, /detect/image_traffic_light,
 # /detect/image_level_crossing while adjusting. OpenCV hue is 0..179.
+# The forward camera (Pi CSI) runs at 640x480, 15 fps since 2026-10-27: at
+# 320x240 the parking sign was read only within 0.8 m (face 20 px, the P
+# gone). Every pixel size below is for 640x480: twice the 320x240 lengths,
+# four times the areas.
 detect_sign:
   ros__parameters:
     blue:
@@ -110,7 +118,7 @@ detect_sign:
     white:
       saturation_h: 80
       value_l: 120
-    min_area: 250         # pixels at 320x240; scale with the resolution
+    min_area: 1000        # pixels at 640x480 (250 at 320x240); scale with the resolution
     arrow:
       min_shift: 0.08
     publish_debug_image: true
@@ -131,7 +139,7 @@ detect_traffic_light:
     green:
       hue_l: 45
       hue_h: 95
-    min_area: 30
+    min_area: 120         # at 640x480 (30 at 320x240)
     housing:
       value_h: 110
     publish_debug_image: true
@@ -147,9 +155,9 @@ detect_level_crossing:
       saturation_l: 90
       value_l: 40
     stripe:
-      min_area: 40
+      min_area: 160       # at 640x480 (40 at 320x240)
       min_fill: 0.6
-      min_thickness: 9    # pixels at 320x240: how near the bar must be
+      min_thickness: 18   # pixels at 640x480 (9 at 320x240): how near the bar must be
     open_angle: 0.35
     # The bar is below the camera; the red seats along the wall are above
     # the horizon (row ~100 of 240) and made a "closed bar" of two patches.
@@ -162,10 +170,11 @@ detect_level_crossing:
       enabled: true
       saturation_l: 60
       value_l: 25
-      min_area: 10
-      line_tolerance: 9.0
-      spacing_min: 12.0
-      spacing_max: 110.0
+      # Pixel sizes at 640x480 (were 10, 9, 12, 110 at 320x240).
+      min_area: 40
+      line_tolerance: 18.0
+      spacing_min: 24.0
+      spacing_max: 220.0
       spacing_ratio: 2.3
       white_value_l: 110
       white_saturation_h: 90

@@ -106,6 +106,9 @@ def launch_setup(context):
     manager_overrides = {'auto_start': auto_start}
     if missions:
         manager_overrides['enabled_missions'] = missions
+    standby_timeout = LaunchConfiguration('standby_timeout').perform(context)
+    if standby_timeout:
+        manager_overrides['standby_timeout'] = float(standby_timeout)
     nodes.append(mission('mission_manager', manager_overrides))
 
     for name in ('traffic_light_mission', 'intersection_mission', 'construction_mission',
@@ -124,6 +127,9 @@ def generate_launch_description():
         DeclareLaunchArgument('auto_start', default_value='false'),
         # Comma-separated missions to run; empty keeps the yaml's list.
         DeclareLaunchArgument('missions', default_value=''),
+        # Seconds the manager waits for the green light before starting anyway;
+        # empty keeps the yaml's (a section test passes a huge value).
+        DeclareLaunchArgument('standby_timeout', default_value=''),
         # The camera for the signs, light and bar, and the lane camera (road).
         # Empty: /camera/image_raw (the forward camera, the Pi camera on the robot).
         DeclareLaunchArgument('sign_camera_topic', default_value=''),
