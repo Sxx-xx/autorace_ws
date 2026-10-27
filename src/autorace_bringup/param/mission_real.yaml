@@ -219,6 +219,12 @@ detect_sign:
     min_area: 1000        # pixels at 640x480 (250 at 320x240); scale with the resolution
     arrow:
       min_shift: 0.08
+    # The arrow signs stand on a blue pole with a blue base: joined to the
+    # pole in the mask the left sign was read in 1 frame of 38 (the right
+    # one, with a gap, in most). Each blue blob is opened with a kernel this
+    # fraction of its smaller side, which cuts the pole off (2026-10-27:
+    # left in 33 of 38 frames). 0 turns it off.
+    pole_cut: 0.35
     publish_debug_image: true
 
 detect_traffic_light:

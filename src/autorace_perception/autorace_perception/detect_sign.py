@@ -71,6 +71,13 @@ class DetectSign(Node):
         # How far the arrow head must sit from the stem, as a fraction of the
         # disc's width, before the sign counts as pointing that way.
         self.declare_parameter('arrow.min_shift', 0.08)
+        # A sign on a stand of its own colour (the blue arrows on a blue pole):
+        # where the pole joins the sign the mask is one tall blob and the box,
+        # hull and arrow are read wrong. Each blob is opened with a kernel this
+        # fraction of its smaller side, wider than the pole, which cuts the
+        # pole off and leaves the sign (and the stand's base) as blobs of their
+        # own. 0 leaves the blobs as they are.
+        self.declare_parameter('pole_cut', 0.35)
         self.declare_parameter('publish_debug_image', True)
 
         def value(name):
@@ -89,6 +96,7 @@ class DetectSign(Node):
         self.white_value = value('white.value_l')
         self.min_area = value('min_area')
         self.arrow_min_shift = value('arrow.min_shift')
+        self.pole_cut = value('pole_cut')
         self.publish_debug = value('publish_debug_image')
 
         self.bridge = CvBridge()
@@ -101,16 +109,33 @@ class DetectSign(Node):
     # --- shapes ----------------------------------------------------------
 
     def blobs(self, mask):
-        """Outer contours big enough to read that do not touch the image edge."""
+        """Outer contours big enough to read that do not touch the image edge.
+
+        A blob is first opened (pole_cut) so that a sign joined to its stand's
+        pole in the mask comes apart from it: the pole, narrower than the
+        kernel, goes; the sign and the base stay, each a blob of its own.
+        """
         height, width = mask.shape
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for contour in contours:
             if cv2.contourArea(contour) < self.min_area:
                 continue
             x, y, w, h = cv2.boundingRect(contour)
-            if x <= 0 or y <= 0 or x + w >= width or y + h >= height:
-                continue
-            yield contour, (x, y, w, h)
+            size = int(self.pole_cut * min(w, h)) | 1
+            if size >= 3:
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+                opened = cv2.morphologyEx(self.filled(contour, (x, y, w, h)), cv2.MORPH_OPEN, kernel)
+                pieces, _ = cv2.findContours(opened, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
+                                             offset=(x, y))
+            else:
+                pieces = [contour]
+            for piece in pieces:
+                if cv2.contourArea(piece) < self.min_area:
+                    continue
+                px, py, pw, ph = cv2.boundingRect(piece)
+                if px <= 0 or py <= 0 or px + pw >= width or py + ph >= height:
+                    continue
+                yield piece, (px, py, pw, ph)
 
     def filled(self, contour, box):
         """Return the contour filled in, holes and all, cropped to its box."""
