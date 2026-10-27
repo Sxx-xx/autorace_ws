@@ -71,12 +71,17 @@ estop.py stops this node with the missions.
     line    along the route
     detour  round an obstacle on the route, back onto it (`blocked` when no way is
             found: it waits and looks again)
-    align   at the goal, in the exit: turn on the spot to face out (exit_heading by
-            the odometry), then until the wall on the right, the far wall running
-            on past the exit, lies parallel to the heading (measured off the laser)
-    leave   straight out along that wall, at the distance it was, until the camera
-            is light again (bright_threshold; start_on tunnel) or leave_distance
-    done    /tunnel_test/done true, and nothing more on cmd_vel_topic: with
+            On the way, an opening between two long walls in the tunnel's left wall (the
+            exit) seen close by takes the place of the goal: the robot heads (A*) for
+            just inside it, and once there faces out square to that wall.
+    align   at the goal: turn on the spot exit_turn to the left of the route (45 deg: from
+            the 45 deg route to facing out of the exit), by the odometry
+    leave   out as in: square to the wall across the way, which is the tunnel's left wall
+            now, through the middle of the exit at its right end (approach_speed), until
+            it is light again (brightness over dark_threshold, the same as going in) or
+            leave_distance
+    done    /tunnel_test/done and /control/lane_resume true (the lane controller starts
+            searching for the lane afresh), and nothing more on cmd_vel_topic: with
             cmd_vel_topic /cmd_vel/mission and lane_drive.launch.py up, the lane
             controller, which drove the robot in, drives on from here
 """
@@ -111,7 +116,13 @@ class TunnelTestMission(Node):
         # The goal from the start: ahead, to the left (the tunnel's exit seen from its entrance).
         self.declare_parameter('goal_x', 1.8)
         self.declare_parameter('goal_y', 1.8)
-        self.declare_parameter('goal_tolerance', 0.06)
+        self.declare_parameter('goal_tolerance', 0.08)
+        # Near the goal and getting no nearer (by arrive_progress in arrive_stall s within
+        # arrive_radius): there, as near as it gets (a goal against a wall). On the robot it
+        # went back and forth at the end of the tunnel for a minute and a half (2026-10-27).
+        self.declare_parameter('arrive_radius', 0.25)
+        self.declare_parameter('arrive_progress', 0.02)
+        self.declare_parameter('arrive_stall', 2.5)
         # Where the entrance is taken from (see the module's notes): run_active or tunnel.
         self.declare_parameter('start_on', 'run_active')
         self.declare_parameter('camera_topic', '/camera/image_raw/compressed')
@@ -152,17 +163,31 @@ class TunnelTestMission(Node):
         # /cmd_vel on its own; /cmd_vel/mission under cmd_vel_mux with the lane controller.
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
         # The exit (see the module's notes): facing out is this heading from the entrance's.
-        self.declare_parameter('exit_heading', math.pi / 2)
-        self.declare_parameter('align_rate', 0.6)        # rad/s at most
-        self.declare_parameter('align_tolerance', 0.035)  # rad (2 deg) off the wall ...
-        self.declare_parameter('align_scans', 3)          # ... on this many scans running
-        self.declare_parameter('align_timeout', 8.0)      # s: then out on the odometry's heading
-        self.declare_parameter('leave_speed', 0.10)
-        self.declare_parameter('wall_gain', 2.0)          # rad/s per rad off parallel
-        self.declare_parameter('side_gain', 3.0)          # rad/s per m off the wall's distance
-        self.declare_parameter('bright_threshold', 80.0)  # mean grey: out of the tunnel
-        self.declare_parameter('leave_min', 0.20)         # m out before the light counts
-        self.declare_parameter('leave_distance', 0.60)    # m: out, light or not
+        self.declare_parameter('exit_turn', math.pi / 4)   # rad left of the route at the goal
+        # The exit seen before the goal: in the left wall (the row of the grid, left of the
+        # robot, with at least exit_wall_min of wall in it), an opening exit_min..exit_max wide
+        # with exit_side_min of wall before it and a wall at its far end, its middle within
+        # exit_range of the robot, on exit_checks plans running. Then the goal is exit_inside
+        # short of the opening's middle. A wall seen far off and askew has gaps between its
+        # returns that look like openings: hence the range and the repeats.
+        self.declare_parameter('exit_detect', True)
+        self.declare_parameter('exit_wall_min', 0.50)
+        self.declare_parameter('exit_min', 0.25)
+        # 0.45: the exit is 0.34 m; an obstacle hiding a stretch of the wall next to it made a
+        # 0.56 m 'exit' whose middle was 0.11 m off (tunnel_sim two, 2026-10-27).
+        self.declare_parameter('exit_max', 0.45)
+        self.declare_parameter('exit_lock', 0.40)   # m from it: stop measuring it again
+        self.declare_parameter('exit_side_min', 0.30)
+        self.declare_parameter('exit_range', 1.20)
+        self.declare_parameter('exit_checks', 3)
+        self.declare_parameter('exit_inside', 0.15)
+        self.declare_parameter('align_rate', 0.6)          # rad/s at most
+        self.declare_parameter('align_tolerance', 0.05)    # rad (3 deg)
+        self.declare_parameter('align_timeout', 6.0)       # s: then out whatever the heading
+        # The camera is ahead of the axle and sees the light first: at 0.15 m the axle was still
+        # in the doorway when the lane controller took over.
+        self.declare_parameter('leave_min', 0.30)          # m out before the light counts
+        self.declare_parameter('leave_distance', 1.0)      # m: back to the lane, light or not
         # The grid, in the start's frame: x ahead, y to the left.
         self.declare_parameter('resolution', 0.02)
         self.declare_parameter('plan_resolution', 0.04)   # the A* grid: coarser, quicker
@@ -187,13 +212,21 @@ class TunnelTestMission(Node):
         self.declare_parameter('max_angular', 1.2)
         # Turn on the spot first when the way lies further off the heading than this.
         self.declare_parameter('turn_in_place_angle', 1.0)
-        # Anything this close ahead (from the axle) stops the robot whatever the plan says.
-        self.declare_parameter('stop_distance', 0.16)
-        self.declare_parameter('stop_half_width', 0.10)
+        # Anything this close ahead (from the axle) stops the robot whatever the plan says. Inside
+        # robot_radius: the plan passes things 0.13 m off, and 0.16 x 0.10 stopped the robot on
+        # such a pass, it turned for the plan, went on and stopped again (2026-10-27).
+        self.declare_parameter('stop_distance', 0.12)
+        self.declare_parameter('stop_half_width', 0.08)
+        # Held that long by the guard: there if near the goal, else plan again at once.
+        self.declare_parameter('hold_timeout', 2.0)
 
         value = lambda name: self.get_parameter(name).value
         self.goal = np.array([value('goal_x'), value('goal_y')])
         self.goal_tolerance = value('goal_tolerance')
+        self.arrive_radius = value('arrive_radius')
+        self.arrive_progress = value('arrive_progress')
+        self.arrive_stall = value('arrive_stall')
+        self.hold_timeout = value('hold_timeout')
         self.start_on = value('start_on')
         self.dark_threshold = value('dark_threshold')
         self.right_wall = (value('right_wall_min'), value('right_wall_max'),
@@ -215,15 +248,18 @@ class TunnelTestMission(Node):
         self.approach_beyond = value('approach_beyond')
         self.approach_max = value('approach_max')
         self.heading_gain = value('heading_gain')
-        self.exit_heading = value('exit_heading')
+        self.exit_heading = math.atan2(self.goal[1], self.goal[0]) + value('exit_turn')
+        self.exit_detect = value('exit_detect')
+        self.exit_wall_min = value('exit_wall_min')
+        self.exit_size = (value('exit_min'), value('exit_max'))
+        self.exit_side_min = value('exit_side_min')
+        self.exit_range = value('exit_range')
+        self.exit_checks = value('exit_checks')
+        self.exit_inside = value('exit_inside')
+        self.exit_lock = value('exit_lock')
         self.align_rate = value('align_rate')
         self.align_tolerance = value('align_tolerance')
-        self.align_scans = value('align_scans')
         self.align_timeout = value('align_timeout')
-        self.leave_speed = value('leave_speed')
-        self.wall_gain = value('wall_gain')
-        self.side_gain = value('side_gain')
-        self.bright_threshold = value('bright_threshold')
         self.leave_min = value('leave_min')
         self.leave_distance = value('leave_distance')
         self.res = value('resolution')
@@ -259,6 +295,11 @@ class TunnelTestMission(Node):
         self.state = 'wait'
         self.path = None               # waypoints (start frame), the robot first
         self.planned_time = -math.inf
+        self.best = (math.inf, 0.0)    # nearest to the goal so far, and when
+        self.exit_seen = []            # the exit's middle on the last plans running
+        self.exit_found = False
+        self.held_since = None         # when the guard began holding
+        self.status_time = -math.inf
         self.brightness = None         # the forward camera's mean grey
         self.scan_time = None          # when the last scan came
         self.front_count = 0
@@ -266,9 +307,7 @@ class TunnelTestMission(Node):
         self.approach_yaw = None       # odometry heading to hold: square to the front wall
         self.approach_target = None    # odometry (x, y) past the doorway's middle
         self.phase_since = 0.0         # when align or leave began
-        self.aligned_count = 0
         self.leave_from = None         # where leave began (start frame)
-        self.leave_wall = None         # the right wall's distance to keep while leaving
         self.entry_count = 0
 
         self.create_subscription(Odometry, '/odom', self.callback_odom, 10)
@@ -287,6 +326,9 @@ class TunnelTestMission(Node):
         self.pub_goal = self.create_publisher(PoseStamped, '/tunnel_test/goal', 1)
         self.pub_grid = self.create_publisher(OccupancyGrid, '/tunnel_test/grid', 1)
         self.pub_done = self.create_publisher(Bool, '/tunnel_test/done', 1)
+        # The lane controller gave up searching for the lane 8 s into the tunnel; this has it
+        # search afresh when the driving is handed back.
+        self.pub_lane_resume = self.create_publisher(Bool, '/control/lane_resume', 1)
         self.grid_time = -math.inf
         self.create_timer(0.05, self.update)
         self.get_logger().info(
@@ -302,6 +344,10 @@ class TunnelTestMission(Node):
         if msg.data and self.state == 'wait' and self.odom is not None:
             self.hits[:] = 0.0
             self.start = self.pose = None
+            self.exit_seen, self.exit_found = [], False
+            self.goal = np.array([self.get_parameter('goal_x').value, self.get_parameter('goal_y').value])
+            self.exit_heading = (math.atan2(self.goal[1], self.goal[0])
+                                 + self.get_parameter('exit_turn').value)
             if self.start_on == 'tunnel':
                 self.entry_count = self.front_count = 0
                 self.state = 'armed'
@@ -476,6 +522,10 @@ class TunnelTestMission(Node):
                 f'Tunnel test: no entry: {gone:.2f} m on and not dark with a wall on the right '
                 '(dark_threshold?); holding.', throttle_duration_sec=2.0)
             return
+        self.pub_cmd_vel.publish(self.through())
+
+    def through(self):
+        """For approach_target (the opening's middle, past it), then on square to its wall."""
         twist = Twist()
         twist.linear.x = 0.0 if self.something_ahead() else self.approach_speed
         xo, yo, ao = self.odom
@@ -486,7 +536,7 @@ class TunnelTestMission(Node):
                 heading = math.atan2(dy, dx)      # for the aim; square to the wall past it
         steer = self.heading_gain * wrap(heading - ao)
         twist.angular.z = max(-self.max_angular, min(self.max_angular, steer))
-        self.pub_cmd_vel.publish(twist)
+        return twist
 
     def callback_odom_pose(self):
         if self.start is None or self.odom is None:
@@ -540,7 +590,9 @@ class TunnelTestMission(Node):
         margin = self.robot_radius
         length = float(np.linalg.norm(self.goal))
         along = self.goal / length
-        goal = self.free_near(self.goal, margin)
+        # A goal against a wall (the tunnel not quite as the goal says): the nearest clear point
+        # within arrive_radius, and the robot is there once it gets no nearer.
+        goal = self.free_near(self.goal, margin, self.arrive_radius)
         if goal is None:
             return None, 'blocked'
         # Where on the route the robot is, and the route's rest from there.
@@ -622,23 +674,43 @@ class TunnelTestMission(Node):
             return
         x, y, yaw = self.pose
         here = np.array([x, y])
-        if self.state == 'align':
-            self.align(yaw)
+        if self.state in ('align', 'leave'):
+            if self.now() - self.status_time >= 1.0:
+                self.status_time = self.now()
+                self.get_logger().info(
+                    f'Tunnel test: {self.state} at ({x:.2f}, {y:.2f}, {math.degrees(yaw):+.0f} deg),'
+                    f' brightness {self.brightness if self.brightness is None else round(self.brightness)}'
+                    f' (light over {self.dark_threshold:.0f})')
+            if self.state == 'align':
+                self.align(yaw)
+            else:
+                self.leave(here)
             return
-        if self.state == 'leave':
-            self.leave(here)
-            return
-        if np.linalg.norm(self.goal - here) < self.goal_tolerance:
-            self.state = 'align'
-            self.phase_since = self.now()
-            self.aligned_count = 0
-            self.pub_cmd_vel.publish(Twist())
-            self.get_logger().info(f'Tunnel test: at the goal ({x:.2f}, {y:.2f}); turning to face out.')
-            return
-
         now = self.now()
+        to_goal = float(np.linalg.norm(self.goal - here))
+        if to_goal < self.best[0] - self.arrive_progress:
+            self.best = (to_goal, now)
+        stalled = to_goal < self.arrive_radius and now - self.best[1] > self.arrive_stall
+        held = self.held_since is not None and now - self.held_since > self.hold_timeout
+        if to_goal < self.goal_tolerance or stalled or (held and to_goal < self.arrive_radius):
+            self.state = 'align'
+            self.phase_since = now
+            self.held_since = None
+            self.pub_cmd_vel.publish(Twist())
+            why = 'at the goal' if to_goal < self.goal_tolerance else (
+                'as near the goal as it gets (%s)' % ('held' if held else 'no nearer'))
+            self.get_logger().info(f'Tunnel test: {why} ({x:.2f}, {y:.2f}, {to_goal:.2f} m off);'
+                                   ' turning to face out.')
+            return
+        if held:
+            self.planned_time = -math.inf      # held away from the goal: plan again now
+            self.held_since = None
+
         if now - self.planned_time > self.replan_period:
             self.planned_time = now
+            if self.exit_detect and (not self.exit_found
+                                     or np.linalg.norm(self.goal - here) > self.exit_lock):
+                self.watch_exit(here)      # and again on the way, as more of the wall shows
             t0 = now
             path, state = self.plan(here)
             if state != self.state:
@@ -671,67 +743,109 @@ class TunnelTestMission(Node):
             twist.angular.z = max(-self.max_angular, min(self.max_angular, speed * curvature))
         if twist.linear.x > 0.0 and self.something_ahead():
             twist.linear.x = 0.0
+            self.held_since = self.held_since or now
             self.get_logger().warn('Tunnel test: something right ahead, holding.',
                                    throttle_duration_sec=1.0)
+        elif twist.linear.x > 0.0:
+            self.held_since = None
         self.pub_cmd_vel.publish(twist)
+        if now - self.status_time >= 1.0:
+            # Once a second, so a run can be drawn again from the log.
+            self.status_time = now
+            self.get_logger().info(
+                f'Tunnel test: {self.state} at ({x:.2f}, {y:.2f}, {math.degrees(yaw):+.0f} deg),'
+                f' goal {to_goal:.2f} m, cmd {twist.linear.x:.2f} m/s {twist.angular.z:+.2f} rad/s,'
+                f' path {len(self.path or [])} pts{", HELD" if self.held_since else ""}')
+
+    def watch_exit(self, here):
+        """Take the exit for the goal once an opening in the left wall is seen close by."""
+        occupied = self.hits >= self.hit_threshold
+        rows = np.nonzero(occupied.sum(axis=1) * self.res >= self.exit_wall_min)[0]
+        rows = rows[self.y_0 + rows * self.res > here[1] + 0.20]       # left of the robot
+        found = None
+        if len(rows):
+            # The left wall: the fullest of those rows, with the rows either side of it.
+            r = rows[np.argmax(occupied[rows].sum(axis=1))]
+            band = occupied[max(0, r - 2):r + 3].any(axis=0)
+            line_y = self.y_0 + r * self.res
+            columns = np.nonzero(band)[0]
+            for a, b in zip(columns[:-1], columns[1:]):
+                width = (b - a - 1) * self.res
+                if not (self.exit_size[0] <= width <= self.exit_size[1]):
+                    continue
+                before = band[:a + 1][::-1]
+                run = np.argmin(before) if not before.all() else len(before)
+                # The far end: the wall going on, or a wall coming in square (the far wall).
+                after = band[b:b + int(self.exit_side_min / self.res)].sum() * self.res
+                square = occupied[max(0, r - int(0.3 / self.res)):r + 1, max(0, b - 1):b + 2].any(axis=1)
+                if run * self.res < self.exit_side_min or (after < 0.10 and square.sum() * self.res < 0.15):
+                    continue
+                middle = np.array([self.x_0 + (a + b) / 2.0 * self.res, line_y])
+                if np.linalg.norm(middle - here) <= self.exit_range:
+                    found = (middle, width)
+                    break
+        if found is None:
+            self.exit_seen = []
+            return
+        self.exit_seen.append(found[0])
+        if len(self.exit_seen) < self.exit_checks:
+            return
+        spread = np.ptp(np.array(self.exit_seen[-self.exit_checks:]), axis=0).max()
+        if spread > 0.08:
+            self.exit_seen = self.exit_seen[-1:]
+            return
+        middle, width = found
+        goal = middle - np.array([0.0, self.exit_inside])          # just inside, below the wall
+        if self.exit_found:
+            if np.linalg.norm(goal - self.goal) > 0.03:
+                self.get_logger().info(
+                    f'Tunnel test: exit now at ({middle[0]:.2f}, {middle[1]:.2f}), {width:.2f} m wide.')
+                self.goal = goal
+                self.publish_route()
+            return
+        self.exit_found = True
+        self.goal = goal
+        self.exit_heading = math.pi / 2                             # out, square to the left wall
+        self.best = (math.inf, self.now())
+        self.get_logger().info(
+            f'Tunnel test: exit seen at ({middle[0]:.2f}, {middle[1]:.2f}), {width:.2f} m wide;'
+            ' heading for it.')
+        self.publish_route()
 
     def align(self, yaw):
-        """Face out of the exit, parallel to the wall on the right."""
-        twist = Twist()
-        off = wrap(self.exit_heading - yaw)
-        wall = self.right_wall_fit()
-        if abs(off) > 0.3 or wall is None:
-            # Round towards the way out by the odometry until the wall is in view.
-            twist.angular.z = math.copysign(min(self.align_rate, 1.5 * abs(off)), off)
-            self.aligned_count = 0
-            if abs(off) < self.align_tolerance and wall is None:
-                self.get_logger().warn('Tunnel test: no wall on the right at the exit.',
-                                       throttle_duration_sec=1.0)
-        else:
-            angle = wall[1]           # the wall's direction against the heading, + left
-            if abs(angle) < self.align_tolerance:
-                self.aligned_count += 1
-            else:
-                self.aligned_count = 0
-                twist.angular.z = math.copysign(min(self.align_rate, max(0.15, 1.5 * abs(angle))),
-                                                angle)
+        """Turn on the spot exit_turn left of the route: facing out of the exit."""
+        off = wrap(self.exit_heading - yaw)   # yaw is in the start's frame
         timed_out = self.now() - self.phase_since > self.align_timeout
-        if self.aligned_count >= self.align_scans or timed_out:
+        if abs(off) < self.align_tolerance or timed_out:
             self.state = 'leave'
-            self.phase_since = self.now()
             self.leave_from = np.array(self.pose[:2])
-            self.leave_wall = None if wall is None else wall[0]
+            self.approach_yaw, self.approach_target = self.odom[2], None
             self.pub_cmd_vel.publish(Twist())
             self.get_logger().info(
-                'Tunnel test: %s; leaving along the right wall (%s).'
-                % ('aligned' if not timed_out else 'align timed out, out on the odometry',
-                   'none' if wall is None else '%.2f m, %+.1f deg' % (wall[0], math.degrees(wall[1]))))
+                'Tunnel test: %s (%+.0f deg off); out through the exit.'
+                % ('facing out' if not timed_out else 'turn timed out', math.degrees(off)))
             return
+        twist = Twist()
+        twist.angular.z = math.copysign(min(self.align_rate, max(0.2, 1.5 * abs(off))), off)
         self.pub_cmd_vel.publish(twist)
 
     def leave(self, here):
-        """Straight out along the right wall, until it is light or far enough."""
+        """Out through the exit as in through the entrance, until it is light again."""
         out = float(np.linalg.norm(here - self.leave_from))
-        light = (self.start_on == 'tunnel' and self.brightness is not None
-                 and self.brightness >= self.bright_threshold)
+        light = self.brightness is not None and self.brightness > self.dark_threshold
         if out >= self.leave_distance or (out >= self.leave_min and light):
             self.state = 'done'
             self.pub_cmd_vel.publish(Twist())
             self.pub_done.publish(Bool(data=True))
-            self.get_logger().info(
-                f'Tunnel test: out ({out:.2f} m, {"light again" if light else "by distance"}); done.')
+            self.pub_lane_resume.publish(Bool(data=True))
+            why = ('light again (%.0f over %.0f)' % (self.brightness, self.dark_threshold)
+                   if light else 'by distance')
+            self.get_logger().info(f'Tunnel test: out ({out:.2f} m, {why}); back to the lane.')
             return
-        twist = Twist()
-        twist.linear.x = self.leave_speed
-        wall = self.right_wall_fit()
-        if wall is not None:
-            distance, angle, _ = wall
-            keep = self.leave_wall if self.leave_wall is not None else distance
-            twist.angular.z = self.wall_gain * angle + self.side_gain * (keep - distance)
-            twist.angular.z = max(-self.max_angular, min(self.max_angular, twist.angular.z))
-        if self.something_ahead():
-            twist.linear.x = 0.0
-        self.pub_cmd_vel.publish(twist)
+        front = self.front_wall_fit()
+        if front is not None:
+            self.aim(front)      # the tunnel's left wall, across the way now, exit at its right end
+        self.pub_cmd_vel.publish(self.through())
 
     def something_ahead(self):
         p = self.points

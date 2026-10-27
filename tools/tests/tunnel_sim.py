@@ -14,6 +14,7 @@ which hands it to the node; the camera goes dark once it is under the roof (5 cm
 axle). enter_askew: the lane runs 6 cm left of the entrance's middle and 7 deg off square.
 """
 import math
+import os
 import sys
 import time
 
@@ -180,6 +181,10 @@ def main():
     rclpy.init(args=['--ros-args', '-p', 'use_sim_time:=false'])
     global GOAL
     probe = TunnelTestMission(); GOAL = tuple(probe.goal); probe.destroy_node()
+    # TUNNEL=1.56 draws the tunnel for that exit instead of the node's goal (a goal that does not
+    # fit the tunnel: 1.8 m against the 1.74 m tunnel of mission_real.yaml).
+    if os.environ.get('TUNNEL'):
+        GOAL = (float(os.environ['TUNNEL']),) * 2
     results = []
     for name in names:
         overrides = [Parameter('start_on', value='tunnel')]

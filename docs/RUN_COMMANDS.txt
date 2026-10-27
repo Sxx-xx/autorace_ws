@@ -150,7 +150,11 @@ ros2 launch autorace_bringup lane_drive.launch.py camera_topic:=/camera/image_ra
 # [노트북 터미널 3] 터널 (A*): 차선 주행이 터널 앞까지 몰고 간다. 앞 왼쪽에 진행 방향과 수직인
 #   정면 벽(입구는 그 오른쪽 끝, 차선과 일직선)이 0.6 m 안에 보이면 넘겨받아 그 벽에 수직으로
 #   입구 가운데를 지나 직진, 오른쪽 벽 + 어두움(dark_threshold 이하)이면 터널 미션 시작:
-#   대각선 끝(1.8, 1.8 m)까지, 오른쪽 벽과 평행으로 돌아 나와서 다시 차선 주행에 넘긴다.
+#   대각선 끝(1.8, 1.8 m)을 향해 A* 로 장애물을 피해 간다. 가는 중에 왼쪽 벽의 빈 곳(출구,
+#   25~45 cm, 1.2 m 안, 3번 연속)이 보이면 목표를 출구 바로 안으로 바꾼다. 목표에 닿으면 왼쪽으로
+#   45도(출구를 봤으면 그 벽에 수직) 돌고, 진입 때처럼 앞 왼쪽 벽에 수직으로 출구 가운데를 지나
+#   나간다. 0.3 m 이상 나가 밝기가 dark_threshold 를 넘으면 차선 주행으로 넘긴다
+#   (/control/lane_resume 로 lane_controller 가 차선 찾기를 처음부터 다시 한다).
 #   1.2 m 들어가도 어두워지지 않으면 멈추고 'no entry' 경고 (dark_threshold 를 로그의 brightness 로 맞출 것)
 ros2 run autorace_core tunnel_test_mission --ros-args -p start_on:=tunnel -p cmd_vel_topic:=/cmd_vel/mission
 #   터널만 (차선 주행 없이, 바퀴 축을 입구 면에 두고):  ros2 run autorace_core tunnel_test_mission

@@ -335,6 +335,10 @@ class LaneController(Node):
         self.create_subscription(Float64, '/control/max_vel', self.callback_max_vel, 1)
         self.create_subscription(UInt8, '/detect/lane_state', self.callback_state, 1)
         self.create_subscription(Bool, '/detect/lane_curve', self.callback_lane_curve, 1)
+        # A mission handing the driving back (tunnel_test_mission out of the tunnel): search for
+        # the lane afresh. The search gave up recovery_timeout s after the lane was lost, which
+        # was deep inside the tunnel, and would not start again without a lane in view.
+        self.create_subscription(Bool, '/control/lane_resume', self.callback_lane_resume, 1)
         self.create_subscription(String, '/detect/lane_follow', self.callback_follow, 1)
         self.create_subscription(Bool, '/autorace/run_active', self.callback_run_active, 1)
         self.create_subscription(String, '/control/turn_at_line', self.callback_order, 1)
@@ -401,6 +405,11 @@ class LaneController(Node):
 
     def callback_state(self, msg):
         self.lane_state = msg.data
+
+    def callback_lane_resume(self, msg):
+        if msg.data:
+            self.recovering_since = None
+            self.get_logger().info('Lane: driving handed back; searching afresh.')
 
     def callback_lane_curve(self, msg):
         self.lane_curve = msg.data
