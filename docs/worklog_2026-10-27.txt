@@ -330,3 +330,81 @@ roi_top 같은 비율 값은 그대로. **아직 주행으로 확인하지 않�
 - 주차: 회전 직후 10° 넘침, 칸 세기가 반사 몇 개에 달려 있음 (parked robot 을 라이다가 거의
   못 봄). 칸 세기를 카메라로도 보강할지.
 - 전체 랩(공사+주차+차단바)을 parking_test.launch.py mission:=... 로.
+
+(17) 2026-11-06  Speed-up, control only. Where the time goes (bag ..._001807, green to tunnel):
+     lane following ~56 s moving at 0.156 m/s mean; against the wheel limit (outer wheel
+     0.20 m/s at the commanded curvature) only 7 % slack, so the lane controller's gains are
+     left alone. The missions hold the slow parts: construction 12 s at 0.10, parking 39 s
+     (lane to the lot 7 s at 0.12), tunnel 61 s (half of it standing / lane lost before the
+     entrance: a function problem, not a speed one).
+     Changed: lane_controller max_speed 0.19 -> 0.20 (and parking approach_speed to match);
+     construction speed 0.10 -> 0.14; parking entrance_speed / up_lane_speed 0.12 -> 0.15.
+     Check on the course: construction clearance to the blocks, the stop at the lot's gap.
+
+(18) 2026-11-10  Level crossing: a raised bar was reported closed and the robot stopped.
+     The old rule: within open_angle (20 deg) of upright is open, anything else closed, so a
+     raised bar leaning more than 20 deg (or rising) stopped the robot. detect_level_crossing
+     now has a window (roi_top/bottom/left/right; real 0.5/1.0/0.05/0.95, drawn on the debug
+     image) and calls the bar closed only within closed_angle of level (0.52 = 30 deg) AND
+     across closed_span of the window's width (0.4). Upright or in between is open (seen,
+     not in the way). Defaults (closed_angle 1.571, span 0) keep the old rule for the sim.
+     Bag ..._231500 124-136 s: the lowered bar still closed (37 of 41 frames, the misses
+     single frames with the bar half under the picture's edge); the five closed frames while
+     the bar was being raised by hand are now open. Synthetic bars: level / 20 deg closed;
+     upright, 60, 40 deg and a short level stub open. Not yet tried on the robot.
+
+(19) 2026-11-10  Construction: the robot hit the last block (bag 184342). Four obstacles were
+     tracked for three blocks; passing the third tracked one ended the mission while the real
+     last block (tracked fourth) was beside the robot's front right, and the lane follower
+     turned into it. Done now needs every tracked obstacle passed, not only obstacle_count.
+     The obstacle log line carries its odometry position and cell count. Replay: done only
+     after the last block. tools/level_crossing_view.py: the bar detector by eye.
+(20) 2026-11-10  Level crossing ROI a trapezoid (roi_top_left / roi_top_right at its top
+     edge, roi_left / roi_right at the bottom; real 0.25..0.75 over 0.05..0.95) and roi_top
+     0.5 -> 0.6, so a bar far off does not stop the robot early. Synthetic bars: a bar
+     across the road at row 0.55 now none (was closed), at 0.63-0.90 still closed. The stop
+     distance itself is to be measured at the venue (체크리스트.md 1-4).
+(21) 2026-11-10  Parking: the stop-and-go. Bags 001807 / 000943 (39 s each): standing still
+     only 0.2 s; the slow ends were the time: three turns on the spot ending at 0.15 rad/s
+     (~0.7 s each) and the drive into the bay and the back-out ending at 0.02 m/s (~1 s each).
+     Now parameters (defaults the old 2.0 / 0.15, 1.5 / 0.02): turn_slow_gain 4.0,
+     turn_min_rate 0.3, stop_gain 3.0, stop_min_speed 0.05; bay_depth 0.24 -> 0.23 for the
+     ~1 cm further run. Simulated with 0.15 s command delay: 90 deg turn 1.91 -> 1.46 s
+     (+2.4 deg past), 23 cm drive 2.60 -> 1.73 s (+0.8 cm past). About 3 s a parking.
+(22) 2026-11-10  Level crossing not taken (bag 190846). The bar was down and the detector
+     said closed, but the construction mission (armed by the laser) was watching at the time
+     and the manager takes the bar's request only while lane following. Construction now hands
+     back on a 'level_crossing' trigger while still watching (as for 'tunnel'); replay: it
+     handed back and the level crossing mission started. start_button shows the bar's answer
+     (bar: none / open / CLOSED xN, a red BAR CLOSED badge on the camera).
+     Thresholds relaxed: red.value_l 40 -> 30 (the maroon was V 43), stripe.min_fill 0.6 -> 0.5,
+     closed_span 0.4 -> 0.3. Today's bags: bar window of 190846 closed 24 -> 67 frames, nothing
+     closed elsewhere; 183852/184213/184342 none either way; 184446 15 -> 32 in its bar scene
+     plus one lone frame at 244.6 (two in a row are needed). The rules before today (any bar
+     not upright, rectangle from mid-picture) gave 75 in the window but 129 elsewhere on 190846
+     (red seats past the tunnel, a hand): the robot would have stopped there.
+(23) 2026-11-10  Run 192545: the parking crossed its lines from the start -> parking rolled back
+     to the last commit (approach_speed 0.19, entrance/up_lane 0.12, bay_depth 0.24, the new
+     turn/stop slow-down parameters dropped from the yaml: their code defaults are the old
+     2.0 / 0.15 and 1.5 / 0.02). The level crossing worked (90.5-94.3 s).
+     Tunnel: hit the exit's left side and stood 39 s. Squared to face out, the opening was
+     0..-0.28 m to the robot's right, a wall 0.24 m ahead on its left: 'at the exit' fires
+     up to 10 cm short and the leave followed the right wall only. Now, as it starts out, the
+     opening ahead is found by the laser (open 2 cm bins with nothing within 0.45 m, 0.20-0.60
+     wide, the one nearest straight ahead); its middle more than 3 cm off -> a step aside once
+     (45 deg on the spot towards it, straight on |middle|/sin45, back square), then out by the
+     opening's middle (arc), the right wall as before when no opening is seen. On the scan of
+     143.0 s: middle -0.11, step 0.16 m, then the opening dead ahead; body clear of the walls
+     by 5.5 cm going through (3.2 cm at the least, turning back), was 0.8 cm and a hit.
+(24) 2026-11-10  Parking out of the bay in one move (back_arc, real on): straight back to
+     back_arc_radius (0.12) from the aisle's middle, then backwards round a quarter circle of
+     that radius to face down the aisle, in place of backing to turn_offset and the 90 deg turn
+     on the spot. Turning backwards the robot ends up the aisle by the radius: with r = the bay
+     depth (0.24) the tail would reach 0.33 past the bay's centre line, over the lot's end line
+     (~0.26, by eye from the lane camera on bag 001807); r 0.12: tail 0.22, body 0.113 into the
+     parked side (aisle half 0.12). About 4.3 s -> ~2 s. The forward arc into the bay is left
+     off (bay_turn_in_place true). Measure the end line at the venue (체크리스트.md 2-2).
+(25) 2026-11-10  Run 193845: back_arc did straight back then arc, as meant, but the straight
+     part slowed into its end (1.5 x distance left, down to 0.02 m/s) and crept ~1 s before
+     the arc: 3.7 s out of the bay (was ~4.4). With back_arc the straight part now keeps its
+     speed up to the arc; ~1.2 s less expected.

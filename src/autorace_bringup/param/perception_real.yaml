@@ -135,7 +135,7 @@ lane_controller:
     # The motors do 0.211 m/s unloaded and less under load; 0.18 leaves the
     # outer wheel room to turn at speed. Raise towards 0.20 once the lane
     # following is clean on the real floor.
-    max_speed: 0.19         # 0.18..0.20 tried; 0.20 is the Burger's usable top (wheel goals of 0.211 m/s are dropped)
+    max_speed: 0.20         # 0.19 -> 0.20 (2026-11-06, speed-up): the mux keeps the outer wheel at 0.20, so bends lose nothing; 0.20 is the usable top (0.211 goals are dropped)
     min_speed: 0.05
     # The run starts on the stop line: no creeping up to it before the green.
     standby_speed: 0.0

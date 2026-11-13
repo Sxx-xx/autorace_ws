@@ -21,7 +21,9 @@ found drawn on it. Right, top: the lane camera as it comes in
 (/camera_lane/image_decoded). Right, bottom: /detect/image_lane, the lane
 detector's map round the robot (yellow and white lines, the arc of
 candidates in green, the target it steers for in red, its state). Along the
-top: the mission manager's state, the last sign and its streak. The robot
+top: the mission manager's state, the last sign and its streak, and the
+level crossing detector's answer (/detect/level_crossing: no bar, open, or
+CLOSED with how many pictures in a row; a red CLOSED badge on the camera). The robot
 stands still until a key is pressed:
 
     SPACE   start the run (/autorace/manual_start; the manager leaves
@@ -47,7 +49,7 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, UInt8
 from std_msgs.msg import String
 
 from autorace_core.mission_manager import STATE_NAMES
@@ -80,6 +82,9 @@ class StartButton(Node):
         self.stopping = False
         self.notice = ''
         self.notice_time = 0.0
+        self.bar = None             # 0 no bar, 1 open, 2 closed
+        self.bar_time = 0.0
+        self.bar_closed_run = 0
 
         self.panels = [image_topic, self.get_parameter('lane_camera_topic').value,
                        self.get_parameter('lane_map_topic').value]
@@ -89,6 +94,7 @@ class StartButton(Node):
                 Image, topic, lambda msg, key=topic: self.callback_image(msg, key), 1)
         self.create_subscription(MissionState, '/autorace/mission_state', self.callback_state, 1)
         self.create_subscription(SignDetection, '/autorace/sign', self.callback_sign, 5)
+        self.create_subscription(UInt8, '/detect/level_crossing', self.callback_bar, 5)
         self.pub_start = self.create_publisher(Bool, '/autorace/manual_start', 1)
         self.pub_trigger = self.create_publisher(String, '/autorace/trigger', 5)
         self.pub_estop = self.create_publisher(Twist, '/cmd_vel/estop', 1)
@@ -129,6 +135,11 @@ class StartButton(Node):
         self.sign = f'{msg.name} x{msg.streak}'
         self.sign_time = self.now()
 
+    def callback_bar(self, msg):
+        self.bar = msg.data
+        self.bar_time = self.now()
+        self.bar_closed_run = self.bar_closed_run + 1 if msg.data == 2 else 0
+
     def say(self, text):
         self.notice = text
         self.notice_time = self.now()
@@ -167,6 +178,12 @@ class StartButton(Node):
         sign, lane, lane_map = self.panels
         left = self.panel(sign, 480, 640, now)
         right = np.vstack([self.panel(lane, 240, 320, now), self.panel(lane_map, 240, 320, now)])
+        bar_fresh = self.bar is not None and now - self.bar_time < 1.0
+        if bar_fresh and self.bar == 2:
+            cv2.rectangle(left, (0, 0), (left.shape[1] - 1, left.shape[0] - 1), (0, 0, 255), 4)
+            cv2.rectangle(left, (left.shape[1] - 150, 8), (left.shape[1] - 8, 40), (0, 0, 255), -1)
+            cv2.putText(left, 'BAR CLOSED', (left.shape[1] - 143, 31),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         frame = np.hstack([left, right])
 
         if self.state is not None and now - self.state_time < 1.0:
@@ -175,7 +192,11 @@ class StartButton(Node):
         else:
             status = 'mission_manager: no state (not running?)'
         seen = self.sign if now - self.sign_time < 1.0 else 'none'
-        lines = [status, f'sign: {seen}']
+        if not bar_fresh:
+            bar = 'bar: (no detector)'
+        else:
+            bar = 'bar: ' + ('none', 'open', f'CLOSED x{self.bar_closed_run}')[min(self.bar, 2)]
+        lines = [status, f'sign: {seen}', bar]
         if self.stopping:
             lines.append('STOPPED (SPACE releases)')
         elif not self.started:
@@ -185,7 +206,7 @@ class StartButton(Node):
 
         pad = np.zeros((16 * len(lines) + 8, frame.shape[1], 3), dtype=np.uint8)
         for i, text in enumerate(lines):
-            colour = (0, 0, 255) if ('STOP' in text) else (0, 255, 0)
+            colour = (0, 0, 255) if ('STOP' in text or 'CLOSED' in text) else (0, 255, 0)
             cv2.putText(pad, text, (6, 16 * i + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.45, colour, 1)
         cv2.imshow(WINDOW, np.vstack([pad, frame]))
         code = cv2.waitKey(1) & 0xFF

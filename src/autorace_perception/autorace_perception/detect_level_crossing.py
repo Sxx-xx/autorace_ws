@@ -63,6 +63,25 @@ class DetectLevelCrossing(Node):
         # is below the camera, and red seats along the venue's wall above the
         # horizon were taken for a bar (2026-10-14).
         self.declare_parameter('roi_top', 0.0)
+        # The rest of the window looked at, as shares of the picture: the
+        # road ahead, where a lowered bar lies across the way (2026-11-10).
+        self.declare_parameter('roi_bottom', 1.0)
+        self.declare_parameter('roi_left', 0.0)
+        self.declare_parameter('roi_right', 1.0)
+        # The window is a trapezoid: roi_left / roi_right are its sides at the
+        # bottom, these at its top. Narrower at the top keeps the far side of
+        # the road out, so a bar seen far off does not stop the robot early
+        # (2026-11-10). Negative: the same as at the bottom (a rectangle).
+        self.declare_parameter('roi_top_left', -1.0)
+        self.declare_parameter('roi_top_right', -1.0)
+        # Closed only when the bar lies within closed_angle of level and
+        # reaches across at least closed_span of the window's width. A bar
+        # between upright and closed (raised but leaning, on its way up or
+        # down) is reported open: seen, not in the way. A raised bar leaning
+        # more than open_angle was taken for a closed one (2026-11-10).
+        # The defaults keep the old rule: anything not upright is closed.
+        self.declare_parameter('closed_angle', 1.571)
+        self.declare_parameter('closed_span', 0.0)
         # Stripes a bar must show. Two patches on a line are easily something
         # else (two seats); a bar near enough to matter shows several.
         self.declare_parameter('min_stripes', 2)
@@ -94,6 +113,14 @@ class DetectLevelCrossing(Node):
         self.min_thickness = value('stripe.min_thickness')
         self.open_angle = value('open_angle')
         self.roi_top = value('roi_top')
+        self.roi_bottom = value('roi_bottom')
+        self.roi_left = value('roi_left')
+        self.roi_right = value('roi_right')
+        top_left, top_right = value('roi_top_left'), value('roi_top_right')
+        self.roi_top_left = self.roi_left if top_left < 0.0 else top_left
+        self.roi_top_right = self.roi_right if top_right < 0.0 else top_right
+        self.closed_angle = value('closed_angle')
+        self.closed_span = value('closed_span')
         self.min_stripes = value('min_stripes')
         self.fragments_enabled = value('fragments.enabled')
         self.fragment_floor = (value('fragments.saturation_l'), value('fragments.value_l'))
@@ -105,18 +132,50 @@ class DetectLevelCrossing(Node):
         self.white_miss = value('fragments.white_miss')
         self.publish_debug = value('publish_debug_image')
 
+        self.width = 640
         self.bridge = CvBridge()
 
         self.create_subscription(Image, '/detect/image_input', self.callback_image, 1)
         self.pub_state = self.create_publisher(UInt8, '/detect/level_crossing', 1)
         self.pub_image = self.create_publisher(Image, '/detect/image_level_crossing', 1)
 
+    def roi(self, shape):
+        """The window looked at, in pixels: (top, bottom, left, right)."""
+        height, width = shape[:2]
+        return (int(self.roi_top * height), int(self.roi_bottom * height),
+                int(self.roi_left * width), int(self.roi_right * width))
+
+    def roi_polygon(self, shape):
+        """The window's corners in pixels: top left, top right, bottom right, bottom left."""
+        height, width = shape[:2]
+        top, bottom = self.roi_top * height, self.roi_bottom * height
+        return np.array([[self.roi_top_left * width, top], [self.roi_top_right * width, top],
+                         [self.roi_right * width, bottom], [self.roi_left * width, bottom]],
+                        np.int32)
+
+    def outside_roi(self, mask):
+        inside = np.zeros(mask.shape[:2], np.uint8)
+        cv2.fillPoly(inside, [self.roi_polygon(mask.shape)], 1)
+        mask[inside == 0] = False
+
+    def judge(self, along, x_low, x_high, width):
+        """Open or closed from the bar's direction and how far across it reaches."""
+        from_upright = math.atan2(abs(along[0]), abs(along[1]))
+        if from_upright < self.open_angle:
+            return BAR_OPEN
+        from_level = math.pi / 2.0 - from_upright
+        _, _, left, right = self.roi((0, width))
+        if (from_level <= self.closed_angle
+                and x_high - x_low >= self.closed_span * (right - left)):
+            return BAR_CLOSED
+        return BAR_OPEN
+
     def stripes(self, hsv):
         """Solid red patches: (centre x, centre y, thickness, box) of each."""
         hue, saturation, value = cv2.split(hsv)
         red = (((hue < self.red_margin) | (hue > 180 - self.red_margin))
                & (saturation > self.red_floor[0]) & (value > self.red_floor[1]))
-        red[:int(self.roi_top * red.shape[0])] = False
+        self.outside_roi(red)
         contours, _ = cv2.findContours(
             red.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         found = []
@@ -154,15 +213,16 @@ class DetectLevelCrossing(Node):
         reach = np.sort(offsets @ along)
         if len(alike) < 3 and np.diff(reach).max() > 4.0 * thickest:
             return BAR_NONE, []
-        from_upright = np.arctan2(abs(along[0]), abs(along[1]))
-        return (BAR_OPEN if from_upright < self.open_angle else BAR_CLOSED), alike
+        x_low = min(stripe[3][0] for stripe in alike)
+        x_high = max(stripe[3][0] + stripe[3][2] for stripe in alike)
+        return self.judge(along, x_low, x_high, self.width), alike
 
     def fragment_bar(self, hsv):
         """The bar as a row of red fragments with white between: (state, centres)."""
         hue, saturation, value = cv2.split(hsv)
         red = (((hue < self.red_margin) | (hue > 180 - self.red_margin))
                & (saturation > self.fragment_floor[0]) & (value > self.fragment_floor[1]))
-        red[:int(self.roi_top * red.shape[0])] = False
+        self.outside_roi(red)
         contours, _ = cv2.findContours(
             red.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         centres = []
@@ -226,12 +286,12 @@ class DetectLevelCrossing(Node):
                 white += 1
         if white < len(points) - 1 - self.white_miss:
             return BAR_NONE, []
-        from_upright = math.atan2(abs(along[0]), abs(along[1]))
-        return (BAR_OPEN if from_upright < self.open_angle else BAR_CLOSED), points
+        return self.judge(along, points[:, 0].min(), points[:, 0].max(), hsv.shape[1]), points
 
     def callback_image(self, msg):
         image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        self.width = hsv.shape[1]
         state, stripes = self.bar(self.stripes(hsv))
         fragments = []
         if state == BAR_NONE and self.fragments_enabled:
@@ -240,6 +300,7 @@ class DetectLevelCrossing(Node):
 
         if self.publish_debug:
             colour = (0, 255, 0) if state == BAR_OPEN else (0, 0, 255)
+            cv2.polylines(image, [self.roi_polygon(image.shape)], True, (255, 128, 0), 1)
             for _, _, _, (x, y, w, h) in stripes:
                 cv2.rectangle(image, (x, y), (x + w, y + h), colour, 2)
             for x, y in fragments:

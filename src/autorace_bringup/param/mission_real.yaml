@@ -39,7 +39,7 @@ construction_mission:
   ros__parameters:
     # First runs on the real course slowly: the gap past a block is only
     # ~7 cm wider than the robot. 0.16 once it gets through cleanly.
-    speed: 0.10
+    speed: 0.14               # 0.10 -> 0.14 (2026-11-06, speed-up): three blocks passed cleanly at 0.10 (bag 001807); 0.16 next if clean
     # LDS-02 centre 3.2 cm behind the wheel axle (measured 2026-10-09).
     lidar_offset: -0.032
     # 0.11 stepped aside steeply, square across the road; 0.16 still too
@@ -128,6 +128,13 @@ parking_mission:
     # lane follower's own 90 deg turn at the mouth (wheel on the line).
     swing_lead: 0.14          # the turn on the spot into the bay begins this far before its centre line: at along 0.10 by request (2026-10-27)
     exit_arc: true
+    # Out of the bay: straight back to 0.12 m from the aisle's middle, then
+    # backwards round a quarter circle of 0.12 m to face down the aisle, in
+    # place of the 90 deg turn on the spot (2026-11-10). It ends 0.12 m
+    # further up the aisle, the tail 0.22 past the bay's centre line (the
+    # lot's end line ~0.26: measure it). ~2.4 s quicker.
+    back_arc: true
+    back_arc_radius: 0.12
     # Back out of the bay to this far short of the aisle's middle before
     # turning to face out (the tail swings towards the other bay). 0.06
     # left the robot's tail in the bay and it turned there; 0.02 backs out
@@ -194,7 +201,7 @@ tunnel_mission:
     # and the dark: not the tunnel, the lane follower goes on.
     opening_width: 0.34
     front_trigger: 0.60
-    approach_speed: 0.10
+    approach_speed: 0.20      # 0.10 -> 0.20 (2026-11-10): as fast as the lane follower
     approach_max: 1.2
 
 # ---- forward camera detectors (TUNE under the venue's lights) ----
@@ -273,15 +280,28 @@ detect_level_crossing:
     red:
       hue_margin: 10
       saturation_l: 90
-      value_l: 40
+      value_l: 30         # 40 -> 30 (2026-11-10): the bar's maroon was V 43 and its stripes dropped out
     stripe:
       min_area: 160       # at 640x480 (40 at 320x240)
-      min_fill: 0.6
+      min_fill: 0.5       # 0.6 -> 0.5 (2026-11-10)
       min_thickness: 18   # pixels at 640x480 (9 at 320x240): how near the bar must be
     open_angle: 0.35
     # The bar is below the camera; the red seats along the wall are above
     # the horizon (row ~100 of 240) and made a "closed bar" of two patches.
-    roi_top: 0.5
+    roi_top: 0.6           # 0.5 -> 0.6 (2026-11-10): a bar far off stopped the robot early
+    # The window on the road ahead (2026-11-10): a raised bar was reported
+    # closed and the robot stopped. Closed now needs the bar within 30 deg
+    # of level and across 40 % of the window's width; upright (open_angle)
+    # or anything in between (raised but leaning, rising) is open.
+    roi_bottom: 1.0
+    roi_left: 0.05
+    roi_right: 0.95
+    # A trapezoid (2026-11-10): at its top (the far end) only the middle of
+    # the road, 0.25..0.75 of the width; at the bottom 0.05..0.95 as above.
+    roi_top_left: 0.25
+    roi_top_right: 0.75
+    closed_angle: 0.52   # 30 deg from level
+    closed_span: 0.3     # 0.4 -> 0.3 (2026-11-10): the bar down reached 33-39 % in bag 190846
     min_stripes: 3
     # The real bar: a round pole, its red a dark maroon shaded below, so
     # each stripe shows as a sliver. Over the 2026-10-14 bags this caught the

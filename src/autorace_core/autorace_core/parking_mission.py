@@ -144,6 +144,14 @@ class ParkingMission(Node):
         # sudden slowing.
         self.declare_parameter('approach_speed', 0.12)
         self.declare_parameter('turn_rate', 0.8)
+        # The end of a turn on the spot: the rate falls as gain x the angle
+        # left, down to turn_min_rate. The end of a drive along a line: the
+        # speed falls as gain x the distance left, down to stop_min_speed.
+        # The slow ends were 4-5 s of a 39 s parking (2026-11-10).
+        self.declare_parameter('turn_slow_gain', 2.0)
+        self.declare_parameter('turn_min_rate', 0.15)
+        self.declare_parameter('stop_gain', 1.5)
+        self.declare_parameter('stop_min_speed', 0.02)
         self.declare_parameter('park_time', 1.0)
         # The mission is over when the robot is heading along the road again,
         # or has driven this far from the lot without getting there.
@@ -153,6 +161,14 @@ class ParkingMission(Node):
         # in ended); then the lane follower. Its own 90 deg turn at the
         # lane's mouth put a wheel over the line (2026-10-27).
         self.declare_parameter('exit_arc', True)
+        # Out of the bay without the turn on the spot: straight back until
+        # back_arc_radius from the aisle's middle, then backwards on a quarter
+        # circle of that radius, ending on the middle facing back down the
+        # aisle (2026-11-10). Turning backwards, the robot ends that far
+        # further up the aisle: the lot's end line is ~0.26 m past the bay's
+        # centre line, and the tail reaches the radius + 0.10.
+        self.declare_parameter('back_arc', False)
+        self.declare_parameter('back_arc_radius', 0.12)
         # Turn on the spot instead of on an arc: at the entrance (drive to
         # the lane's middle, stop, 90 deg left) and into the bay (drive to
         # the bay's centre line, stop, 90 deg). Asked for 2026-10-27; the
@@ -248,9 +264,16 @@ class ParkingMission(Node):
         self.speed = value('speed')
         self.approach_speed = value('approach_speed')
         self.turn_rate = value('turn_rate')
+        self.turn_slow_gain = value('turn_slow_gain')
+        self.turn_min_rate = value('turn_min_rate')
+        self.stop_gain = value('stop_gain')
+        self.stop_min_speed = value('stop_min_speed')
         self.park_time = value('park_time')
         self.exit_limit = value('exit_limit')
         self.exit_arc = value('exit_arc')
+        self.back_arc = value('back_arc')
+        self.back_arc_radius = value('back_arc_radius')
+        self.arc_radius = None      # the radius the arc out of the bay was started on
         self.entrance_turn_in_place = value('entrance_turn_in_place')
         self.entrance_turn_angle = value('entrance_turn_angle')
         self.bay_turn_angle = value('bay_turn_angle')
@@ -757,7 +780,7 @@ class ParkingMission(Node):
         twist = Twist()
         if abs(error) < 0.03:
             return twist, True
-        rate = max(0.15, min(self.turn_rate, 2.0 * abs(error)))
+        rate = max(self.turn_min_rate, min(self.turn_rate, self.turn_slow_gain * abs(error)))
         twist.angular.z = math.copysign(rate, error)
         return twist, False
 
@@ -774,7 +797,7 @@ class ParkingMission(Node):
         correction = max(-0.5, min(0.5, 4.0 * off_line))
         target = course + correction if reverse else course - correction
         # Slow down into the end of the line rather than run past it.
-        speed = min(self.speed, max(0.02, 1.5 * to_go))
+        speed = min(self.speed, max(self.stop_min_speed, self.stop_gain * to_go))
         twist = Twist()
         twist.linear.x = -speed if reverse else speed
         twist.angular.z = max(-1.0, min(1.0, 2.5 * wrap(target - heading)))
@@ -1066,12 +1089,35 @@ class ParkingMission(Node):
             if now - self.phase_start > self.park_time:
                 self.enter('back_out')
 
+        elif self.phase == 'back_arc':
+            # Backwards, turning towards the way out: anticlockwise out of the
+            # left bay, clockwise out of the right one. Over once facing back
+            # down the aisle (pi), then the leave squares up on its middle.
+            if self.side * wrap(math.pi - heading) <= 0.05:
+                self.get_logger().info(
+                    'Parking: out of the bay, %+.3f m left of the aisle middle.' % -across)
+                self.enter('leave')
+            else:
+                twist.linear.x = -self.speed
+                twist.angular.z = self.side * self.speed / self.arc_radius
+
         elif self.phase == 'back_out':
             off_line = -self.side * (along - self.bay_station)
-            twist = self.drive(heading, self.side * math.pi / 2.0, off_line,
-                               self.side * across - self.turn_offset, reverse=True)
-            if self.side * across <= self.turn_offset:
-                self.enter('face_out')
+            stop_at = self.back_arc_radius if self.back_arc else self.turn_offset
+            # Into the arc without slowing: the robot does not stop there
+            # (it crept the last centimetres at 0.02 m/s, 2026-11-10).
+            to_go = 1.0 if self.back_arc else self.side * across - stop_at
+            twist = self.drive(heading, self.side * math.pi / 2.0, off_line, to_go,
+                               reverse=True)
+            if self.side * across <= stop_at:
+                if self.back_arc:
+                    self.arc_radius = max(0.08, self.side * across)
+                    self.get_logger().info(
+                        'Parking: backing round on an arc of %.2f m to face back down the aisle.'
+                        % self.arc_radius)
+                    self.enter('back_arc')
+                else:
+                    self.enter('face_out')
 
         elif self.phase == 'face_out':
             twist, there = self.turn_to(heading, math.pi)

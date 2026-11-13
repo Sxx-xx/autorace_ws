@@ -171,6 +171,24 @@ class TunnelMission(Node):
         self.declare_parameter('wall_gain', 2.0)
         self.declare_parameter('side_gain', 3.0)
         self.declare_parameter('leave_distance', 1.0)
+        # Out through the middle of the opening the laser sees ahead, not by
+        # the reckoning alone: 'at the exit' fires up to 10 cm short of it,
+        # the opening leaves 8 cm a side, and the robot drove into the exit's
+        # left side 14 cm off its middle (2026-11-10, bag 192545). Open
+        # stretches across the way, with nothing nearer than exit_gap_reach,
+        # between exit_gap_min and exit_gap_max wide; the one nearest straight
+        # ahead is steered for. More than exit_gap_turn off: turn on the spot.
+        self.declare_parameter('exit_gap', True)
+        self.declare_parameter('exit_gap_reach', 0.45)
+        self.declare_parameter('exit_gap_min', 0.20)
+        self.declare_parameter('exit_gap_max', 0.60)
+        self.declare_parameter('exit_gap_turn', 0.5)
+        # Once, as it starts out: an exit middle more than exit_step_min off
+        # to one side is made up by a step aside: on the spot exit_step_angle
+        # towards it, straight on until level with it, and back square. An
+        # arc has no room for it: the exit's sides are ~0.25 m ahead.
+        self.declare_parameter('exit_step_min', 0.03)
+        self.declare_parameter('exit_step_angle', 0.785)
         self.declare_parameter('active_timeout', 1.0)
         # Once in and dark: turn on the spot to face the exit (45 deg left),
         # within turn_tolerance, at most turn_timeout seconds, then drive.
@@ -231,6 +249,13 @@ class TunnelMission(Node):
         self.wall_gain = value('wall_gain')
         self.side_gain = value('side_gain')
         self.leave_distance = value('leave_distance')
+        self.exit_gap = value('exit_gap')
+        self.exit_gap_reach = value('exit_gap_reach')
+        self.exit_gap_min = value('exit_gap_min')
+        self.exit_gap_max = value('exit_gap_max')
+        self.exit_gap_turn = value('exit_gap_turn')
+        self.exit_step_min = value('exit_step_min')
+        self.exit_step_angle = value('exit_step_angle')
         self.active_timeout = value('active_timeout')
         self.turn_rate = value('turn_rate')
         self.turn_tolerance = value('turn_tolerance')
@@ -283,6 +308,9 @@ class TunnelMission(Node):
         self.align_start = 0.0
         self.square_count = 0
         self.leave_from = None
+        self.gap_logged = False
+        self.step = None            # the step aside at the exit, while it lasts
+        self.step_tried = False
         self.travelled = 0.0
 
         self.create_subscription(
@@ -736,8 +764,99 @@ class TunnelMission(Node):
         twist.angular.z = math.copysign(rate, angle)
         return twist, False
 
+    def opening_ahead(self):
+        """The opening across the way ahead, from the laser: (middle across, nearest
+        wall ahead beside it), or None. Robot frame, y to the left."""
+        points = self.last_points
+        if points is None:
+            return None
+        ahead = points[(points[:, 0] > 0.05) & (points[:, 0] < self.exit_gap_reach)
+                       & (np.abs(points[:, 1]) < 0.47)]
+        if len(ahead) < 5:
+            return None
+        edges = np.arange(-0.46, 0.4601, 0.02)
+        blocked = np.histogram(ahead[:, 1], bins=edges)[0] > 0
+        runs, start = [], None
+        for i, b in enumerate(list(blocked) + [True]):
+            if not b and start is None:
+                start = i
+            elif b and start is not None:
+                # Only an opening with something on both sides of it.
+                if start > 0 and i < len(blocked):
+                    runs.append((edges[start], edges[i]))
+                start = None
+        runs = [r for r in runs if self.exit_gap_min <= r[1] - r[0] <= self.exit_gap_max]
+        if not runs:
+            return None
+        low, high = min(runs, key=lambda r: abs((r[0] + r[1]) / 2.0))
+        return (low + high) / 2.0, float(ahead[:, 0].min())
+
+    def through_opening(self, opening):
+        """Into the middle of the opening ahead: an arc, or on the spot if far off."""
+        middle, wall = opening
+        reach = max(0.25, wall + 0.10)
+        twist = Twist()
+        bearing = math.atan2(middle, reach)
+        if abs(bearing) > self.exit_gap_turn:
+            twist.angular.z = math.copysign(0.6, bearing)
+            return twist
+        curvature = 2.0 * middle / (reach * reach + middle * middle)
+        twist.linear.x = self.leave_speed
+        twist.angular.z = max(-self.cornering_rate, min(self.cornering_rate,
+                                                       self.leave_speed * curvature))
+        return twist
+
+    def step_aside(self):
+        """The step aside into line with the exit's middle; None once over."""
+        stage, side, length, yaw_0, start = self.step
+        yaw = self.odom_pose[2]
+        twist = Twist()
+        if stage in ('turn', 'back'):
+            target = yaw_0 + (side * self.exit_step_angle if stage == 'turn' else 0.0)
+            error = wrap(target - yaw)
+            if abs(error) > 0.05:
+                twist.angular.z = math.copysign(max(0.3, min(0.8, 2.0 * abs(error))), error)
+                return twist
+            if stage == 'back':
+                self.step = None
+                self.get_logger().info('Tunnel: in line with the exit, out.')
+                return None
+            self.step = ('drive', side, length, yaw_0, self.travelled)
+            return Twist()
+        if self.travelled - start >= length:
+            self.step = ('back', side, length, yaw_0, start)
+            return Twist()
+        twist.linear.x = self.leave_speed
+        target = yaw_0 + side * self.exit_step_angle
+        twist.angular.z = max(-0.5, min(0.5, 2.0 * wrap(target - yaw)))
+        return twist
+
     def follow_right_wall(self):
         """Drive out along the wall on the right, the exit's half width off it."""
+        if self.step is not None:
+            twist = self.step_aside()
+            if twist is not None:
+                return twist
+        if self.exit_gap:
+            opening = self.opening_ahead()
+            if opening is not None and not self.step_tried:
+                self.step_tried = True
+                middle = opening[0]
+                if abs(middle) > self.exit_step_min:
+                    length = abs(middle) / math.sin(self.exit_step_angle)
+                    self.step = ('turn', math.copysign(1.0, middle), length,
+                                 self.odom_pose[2], self.travelled)
+                    self.get_logger().info(
+                        'Tunnel: the exit\'s middle %+.2f m to the left; stepping aside '
+                        '%.2f m to line up with it.' % (middle, length))
+                    return self.step_aside()
+            if opening is not None:
+                if not self.gap_logged:
+                    self.gap_logged = True
+                    self.get_logger().info(
+                        'Tunnel: the exit seen %+.2f m to the left of the robot, %.2f m ahead; '
+                        'steering for its middle.' % opening)
+                return self.through_opening(opening)
         twist = Twist()
         twist.linear.x = self.leave_speed
         wall = self.right_wall()
@@ -823,6 +942,9 @@ class TunnelMission(Node):
                     self.get_logger().info('Tunnel: square to the wall, leaving.')
                 self.phase = 'leave'
                 self.leave_from = self.travelled
+                self.gap_logged = False
+                self.step = None
+                self.step_tried = False
                 self.bright_count = 0
                 self.light = False
                 twist = Twist()

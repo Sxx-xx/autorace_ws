@@ -96,6 +96,8 @@ diff -u src/turtlebot3_autorace/turtlebot3_autorace_detect/turtlebot3_autorace_d
 
 ## 실행
 
+대회장에 가서 다시 맞출 값과 순서는 [체크리스트.md](체크리스트.md), 지금 값은 `tools/venue_params.py`.
+
 ```bash
 # Pi: 베이스, 라이다, 두 카메라 (로그와 pid 는 Pi 의 홈에). 부팅 뒤 1 분 기다렸다가.
 ssh dd@turtlebot1.local '~/start_all.sh'      # "wifi Power save: off" 와 "started: ..." 가 나와야 한다

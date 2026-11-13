@@ -767,7 +767,8 @@ class ConstructionMission(Node):
                     self.tracked.append([cx, cy, int(stats[k, cv2.CC_STAT_AREA]), False])
                     self.get_logger().info(
                         f'Construction: obstacle {len(self.tracked)} in the road, '
-                        f'{c_along:.2f} m ahead, {c_across:+.2f} m across.')
+                        f'{c_along:.2f} m ahead, {c_across:+.2f} m across '
+                        f'(odometry {cx:+.2f}, {cy:+.2f}; {int(stats[k, cv2.CC_STAT_AREA])} cells).')
         passed = sum(1 for obstacle in self.tracked if obstacle[3])
         for obstacle in self.tracked:
             if not obstacle[3]:
@@ -828,8 +829,13 @@ class ConstructionMission(Node):
         self.doorway = msg.data
 
     def callback_trigger(self, msg):
-        if msg.data == 'tunnel' and self.phase == 'approach':
-            self.get_logger().warn('Construction: the tunnel is here, handing back.')
+        # Only while still watching (approach), never while getting round an
+        # obstacle. The level crossing too: armed by the laser, the mission
+        # held the road while the bar was down ahead, and the manager takes
+        # the bar's request only while lane following (2026-11-10, bag 190846).
+        if msg.data in ('tunnel', 'level_crossing') and self.phase == 'approach':
+            what = 'the tunnel is' if msg.data == 'tunnel' else 'the level crossing bar is down'
+            self.get_logger().warn(f'Construction: {what} here, handing back.')
             self.skipped = True
             self.phase = 'done'
 
@@ -870,7 +876,12 @@ class ConstructionMission(Node):
         # made out in the road yet.
         clear = self.road_is_clear(along, across)
         passed = self.track_obstacles(along, across, x, y)
-        if self.obstacle_count > 0 and passed >= self.obstacle_count:
+        # Every obstacle met must be behind, not just obstacle_count of them: a
+        # stray counted as the third was passed while the real third, met
+        # later as a fourth, stood beside the robot, and the lane follower
+        # turned into it (2026-11-10, bag 184342).
+        if (self.obstacle_count > 0 and passed >= self.obstacle_count
+                and passed == len(self.tracked)):
             # The last one is beside the robot: hand over now, facing the road.
             self.get_logger().info(
                 f'Construction: last of {passed} obstacles beside the robot, done.')
@@ -889,7 +900,8 @@ class ConstructionMission(Node):
         if self.clear_count >= 3:
             if self.cleared_at is None:
                 self.cleared_at = travelled
-            if self.obstacle_count > 0 and passed >= self.obstacle_count:
+            if (self.obstacle_count > 0 and passed >= self.obstacle_count
+                    and passed == len(self.tracked)):
                 # All behind: the lane follower takes the bend that ends the zone.
                 self.get_logger().info(
                     f'Construction: all {passed} obstacles passed, road clear, done.')
