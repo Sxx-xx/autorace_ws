@@ -60,6 +60,7 @@
 
 - 이 로봇(turtlebot1)의 Pi 카메라가 640×480@15 에서 GPU MJPEG passthrough 를 내는지, 5 Mbit/s 화질이 표지판에 충분한지
 - 대회장 Wi-Fi 에서 실제 지연이 줄었는지
+- 5 GHz 망에서 달려 보기 (아래 'Wi-Fi: 5 GHz 로 옮기기'). 기록상 아직 한 번도 없음
 - 로봇 Pi 와 PC 에 CycloneDDS 가 깔려 있는지 (없으면 둘 다 Fast DDS 로 돌고, 그래도 QoS·압축 개선은 그대로 적용된다)
 
 ## 로봇에 올리는 순서
@@ -79,6 +80,51 @@ ros2 topic hz /camera_lane/image_raw/compressed   # 30 Hz 근처
 
 되돌리기: 통신만 원래대로 → PC·Pi 모두 `DDS=fastdds`. 전방 카메라 재압축으로 → `start_camera.sh` 의
 `passthrough:=true -p bitrate:=5000000` 을 빼면 된다.
+
+## Wi-Fi: 5 GHz 로 옮기기 (코드로는 못 고치는 지연의 바탕)
+
+QoS·압축을 고쳐도 무선 자체가 재전송투성이면 지연과 끊김은 남는다. 기록상 이 로봇은 **5 GHz 로 실험한 적이 없다**.
+
+| 날짜 | 기록 (`docs/worklog_2026-10-27.txt`, `README.md`) |
+|---|---|
+| 10-27 | 핫스팟 `1954` 가 **2.4 GHz 6 번 채널**, 주변 AP 가 5·9·13 번이라 겹침 → Pi 재시도 카운터 **1953** |
+| 10-27 | 캠퍼스 Guest(5 GHz, 채널 52/100/132 전부 **DFS**)에는 Pi 가 **접속 못 함**. "핫스팟을 5 GHz 로 바꿔 보기로" 는 계획으로만 남음 |
+| 이후 | README 남은 일 `[ ] 핫스팟 5 GHz 비교` 그대로. 11-13 worklog 에는 Wi-Fi 대역 기록 없음 (그날 쓴 핫스팟의 대역은 모름) |
+| 11-13 | `tools/robot_add_navigator.sh` 추가: 노트북 AP(`Navigator`) 나 ipTIME(`iptime5G`) 을 Pi 에 등록하는 도구. 실제로 그 망으로 달린 기록은 없음 |
+
+참고로 다른 로봇(turtlebot2, 같은 Pi 카메라)에서 아이폰 핫스팟을 2.4 → 5 GHz 로 바꿨을 때
+(2026-10-22): 90 fps·10 Mbit/s 영상 수신 83~88 → **90.2 Hz**, 최대 공백 0.85 s → **37 ms**, ROS 왕복 지연 p90 22.8 → **11.2 ms**.
+
+### 무엇을 쓸까 (좋은 순서)
+
+1. **ipTIME 공유기 `iptime5G`**: 채널을 **36·40·44·48 중 하나로 고정** (자동이면 DFS 채널로 옮겨 갈 수 있음),
+   대역폭 20~40 MHz (붐비는 곳에서는 좁을수록 안정적), 로봇 가까이. 등록: `PROFILE=robot-router tools/robot_add_navigator.sh`.
+2. **아이폰 핫스팟**: 설정 → 개인용 핫스팟 → **"호환성 최대화" 끄기** = 5 GHz. 켜져 있으면 2.4 GHz.
+3. **노트북 AP `Navigator`**: 노트북 와이파이를 5 GHz 비DFS 채널(36~48)로 띄운다 (`nmcli con modify robot-ap 802-11-wireless.band a 802-11-wireless.channel 36`).
+4. 어쩔 수 없이 2.4 GHz 면 채널 **1 이나 11** (6 은 주변과 겹쳤다), 대역폭 20 MHz.
+
+**DFS 채널(52~64, 100~144) 은 피한다**: 레이더를 감지하면 공유기가 채널을 옮기고, 기기는 들어 본 뒤에야 붙는다.
+한국 비DFS 5 GHz 채널은 36~48, 149~161.
+
+### Pi 국가 코드 (추정 원인, 확인 필요)
+
+Pi 의 무선 국가 코드가 비어 있으면(`country 00`) 5 GHz 일부 채널을 못 쓰거나 수동으로만 찾는다. 10-27 에 DFS 망에 못 붙은 것이
+이 때문일 수 있다. 확인과 설정 (Pi):
+
+```bash
+iw reg get                     # country KR 이 아니면
+# /etc/netplan/ 의 wifis.wlan0 아래에  regulatory-domain: "KR"  추가 후
+sudo netplan apply             # (ssh 가 끊길 수 있음)
+```
+
+### 대회장에서 잴 것 (Pi)
+
+```bash
+iw dev wlan0 link | grep -E "SSID|freq|signal|tx bitrate"   # freq 2412~2472 = 2.4 GHz, 5180 이상 = 5 GHz
+iw dev wlan0 station dump | grep -E "tx (retries|failed)"   # 몇 초 간격으로 두 번: 빠르게 늘면 무선 문제
+sudo iw dev wlan0 scan | grep -E "freq|SSID|signal" | paste - - -   # 주변 AP 와 채널
+```
+PC: `ping -c 100 turtlebot1.local` (최대·손실). **어느 망·대역·채널로 달렸는지 worklog 에 꼭 적는다** (지금까지 없어서 비교가 안 된다).
 
 ## 저장소 ↔ Pi 설정 맞추기 (이 브랜치를 이어받는 사람·Claude Code 에게)
 

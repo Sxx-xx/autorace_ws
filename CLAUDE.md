@@ -17,4 +17,6 @@
 - PC 와 로봇은 **같은 DDS** 여야 한다: PC 터미널마다 `export DDS_PEERS=<로봇 호스트>; source tools/dds.sh`,
   Pi 스크립트는 자동. 확인은 `tools/check_robot.sh`.
 - `ROS_DOMAIN_ID` 는 30. 같은 Wi-Fi 에서 로봇 두 대를 동시에 쓰지 말 것.
+- Wi-Fi 는 **5 GHz 비DFS 채널(36~48)** 망을 쓴다. 기록상 이 로봇은 2.4 GHz(재전송 많음)로만 달렸다.
+  실험할 때 Pi 의 `iw dev wlan0 link` 로 대역을 확인하고 worklog 에 적는다 (docs/INTEGRATION_2.md 'Wi-Fi').
 - 다른 사람의 브랜치(`integration_1`, `parking_finish` 등)는 직접 고치지 말고 새 브랜치로.
