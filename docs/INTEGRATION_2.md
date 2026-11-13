@@ -39,6 +39,7 @@
 | `tools/pi/start_robot.sh`, `start_lidar.sh`, `start_camera*.sh` | `export ROS_DOMAIN_ID=30` 대신 `tools/dds.sh` 를 source (없으면 `~/dds.sh`, 그것도 없으면 Fast DDS + 경고) |
 | `tools/check_robot.sh` | 추가: PC·로봇의 DDS 비교 (로봇에서 실행 중인 노드의 환경변수를 읽음), 카메라 publisher QoS 와 구독자 수 |
 | `tools/pi/check_sync.sh` (새 파일) | **Pi 에서** 실행: 홈의 복사본이 저장소와 같은지, CycloneDDS 설치, Wi-Fi 절전 설정. 다르면 맞추는 명령을 출력 (스스로는 안 바꿈) |
+| `tools/wifi_channel.py` (새 파일) | 모든 채널을 스캔해 붐비지 않는 비DFS > 붐비지 않는 DFS > 덜 붐비는 비DFS > 덜 붐비는 DFS > 2.4 GHz 순으로 채널을 고름. `--apply` 로 노트북 AP 설정 (아래 'Wi-Fi') |
 | `체크리스트.md` | 0번(준비): `source tools/dds.sh`, 처음 한 번 할 일, check_robot 에서 볼 것 |
 | `CLAUDE.md`, `docs/INTEGRATION_2.md` (새 파일) | 이 문서들 |
 
@@ -55,6 +56,8 @@
   홈 복사본이면 `~/csi_camera.py` 와 경고, `dds.sh` 가 없으면 Fast DDS 와 경고.
 - **`dds.sh`**: Cyclone(피어 지정), 해석 안 되는 피어 섞임, Fast DDS 세 경우 모두 실제로 메시지가 오감.
 - **`check_robot.sh` / `check_sync.sh`**: 가짜 카메라·가짜 Pi 홈으로 출력 확인.
+- **`wifi_channel.py`**: 만든 스캔 결과 6 가지(조용한 비DFS 있음 / 비DFS 모두 붐빔 / 전부 붐빔 / 40 MHz / 로봇 국가 00·5 GHz 불가 / nmcli 형식)에서
+  순위대로 고름, 80·160 MHz 이웃 AP 계산, 우리 망 제외, `--apply` 실패 시 다음 순위, Pi sudo 암호 묻는 경로를 가짜 명령으로 확인. 실제 Wi-Fi 스캔은 안 해 봄.
 
 ## 확인 안 한 것 (로봇 필요)
 
@@ -95,16 +98,48 @@ QoS·압축을 고쳐도 무선 자체가 재전송투성이면 지연과 끊김
 참고로 다른 로봇(turtlebot2, 같은 Pi 카메라)에서 아이폰 핫스팟을 2.4 → 5 GHz 로 바꿨을 때
 (2026-10-22): 90 fps·10 Mbit/s 영상 수신 83~88 → **90.2 Hz**, 최대 공백 0.85 s → **37 ms**, ROS 왕복 지연 p90 22.8 → **11.2 ms**.
 
-### 무엇을 쓸까 (좋은 순서)
+### 채널 고르기: `tools/wifi_channel.py` (대회장에서 매번)
 
-1. **ipTIME 공유기 `iptime5G`**: 채널을 **36·40·44·48 중 하나로 고정** (자동이면 DFS 채널로 옮겨 갈 수 있음),
+모든 채널을 스캔해서 아래 우선순위로 채널을 고른다. **로봇이 달릴 자리에서, 로봇 Wi-Fi 로** 스캔한다 (기본값. Pi sudo 암호를 한 번 묻는다).
+
+| 순위 | 조건 |
+|---|---|
+| 1 | 붐비지 않는 **비DFS** (36~48, 149~165) |
+| 2 | 붐비지 않는 **DFS** (52~64, 100~144). 기상 레이더 채널 120~128 은 DFS 중 마지막 |
+| 3 | 비DFS 중 가장 덜 붐비는 곳 |
+| 4 | DFS 중 가장 덜 붐비는 곳 |
+| 5 | 2.4 GHz 1·6·11 (로봇이 5 GHz 를 하나도 못 쓸 때만) |
+
+```bash
+python3 tools/wifi_channel.py                     # 스캔 → 채널별 표 → CHOSEN: channel N
+python3 tools/wifi_channel.py --apply robot-ap    # 노트북 AP(Navigator)를 그 채널로 바로 설정, 안 뜨면 다음 순위로
+python3 tools/wifi_channel.py --width 40          # 40 MHz AP 로 쓸 때 (두 채널 묶음으로 계산)
+python3 tools/wifi_channel.py --scan pc           # 노트북으로 스캔 (채널 폭을 몰라 덜 정확)
+```
+
+- **붐빔(crowding)**: 그 채널에 걸친 다른 AP 마다 신호 세기로 가중(-95 dBm 0, -70 dBm 1, -45 dBm 이상 2)하고, AP 가 알려 주는
+  채널 사용률(BSS load)이 있으면 더 키워 더한 값. 80·160 MHz AP 는 걸친 채널 모두에 센다. **1.0 이하(= -70 dBm AP 하나 정도)면 "붐비지 않음"**
+  (`--quiet` 로 바꿈).
+- 로봇이 지금 붙어 있는 망(우리 AP)과 `--own 이름` 은 붐빔에 세지 않는다.
+- 로봇 Wi-Fi 가 못 쓰는 채널(`iw list` 의 disabled)은 뺀다. 로봇 국가 코드가 KR 이 아니면 경고한다.
+- 정해진 채널을 넣는 곳:
+  - **ipTIME**: 관리 페이지(192.168.0.1) → 5 GHz 무선 설정 → 그 채널로 **고정**(자동 X), 폭 20 MHz(`--width 40` 이면 40)
+  - **노트북 AP**: `--apply robot-ap`. 노트북 무선 카드는 DFS 채널에서 AP 를 못 띄우는 경우가 많아, 실패하면 다음 순위로 넘어간다
+  - **아이폰 핫스팟**: 채널을 정할 수 없다. 표에서 핫스팟 채널이 붐비면 ipTIME 이나 노트북 AP 로
+- AP 채널을 바꾸면 로봇이 잠깐 끊겼다가 다시 붙는다. 주행 전에 정하고, **DFS 로 정해졌으면 로봇이 붙는지 먼저 확인**.
+
+### 망 종류 (좋은 순서)
+
+1. **ipTIME 공유기 `iptime5G`**: 채널을 위 도구로 정해 **고정** (자동이면 DFS 채널로 옮겨 갈 수 있음),
    대역폭 20~40 MHz (붐비는 곳에서는 좁을수록 안정적), 로봇 가까이. 등록: `PROFILE=robot-router tools/robot_add_navigator.sh`.
-2. **아이폰 핫스팟**: 설정 → 개인용 핫스팟 → **"호환성 최대화" 끄기** = 5 GHz. 켜져 있으면 2.4 GHz.
-3. **노트북 AP `Navigator`**: 노트북 와이파이를 5 GHz 비DFS 채널(36~48)로 띄운다 (`nmcli con modify robot-ap 802-11-wireless.band a 802-11-wireless.channel 36`).
-4. 어쩔 수 없이 2.4 GHz 면 채널 **1 이나 11** (6 은 주변과 겹쳤다), 대역폭 20 MHz.
+2. **노트북 AP `Navigator`**: `python3 tools/wifi_channel.py --apply robot-ap`.
+3. **아이폰 핫스팟**: 설정 → 개인용 핫스팟 → **"호환성 최대화" 끄기** = 5 GHz. 켜져 있으면 2.4 GHz. 채널은 못 정함.
+4. 어쩔 수 없이 2.4 GHz 면 도구가 1·6·11 중에서 고른다 (10-27 에는 6 이 주변과 겹쳤다), 대역폭 20 MHz.
 
-**DFS 채널(52~64, 100~144) 은 피한다**: 레이더를 감지하면 공유기가 채널을 옮기고, 기기는 들어 본 뒤에야 붙는다.
-한국 비DFS 5 GHz 채널은 36~48, 149~161.
+**DFS 가 비DFS 보다 뒤인 이유**: 레이더를 감지하면 AP 가 채널을 옮기고 새 채널에서 1 분(120~128 은 10 분) 동안 듣기만 한다
+(그동안 로봇 통신 끊김). 기기는 DFS 채널에서 먼저 신호를 못 보내고 AP 를 들어야 붙는다 (10-27 Guest 접속 실패의 가능성).
+대신 DFS 채널은 쓰는 기기가 적어 비어 있는 경우가 많으므로, 비DFS 가 모두 붐빌 때는 붐비는 비DFS 보다 비어 있는 DFS 가 낫다.
+한국 비DFS 5 GHz 채널은 36~48, 149~165.
 
 ### Pi 국가 코드 (추정 원인, 확인 필요)
 
