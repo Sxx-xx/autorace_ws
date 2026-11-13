@@ -248,11 +248,17 @@ detect_traffic_light:
     # A lit LED is brighter and more saturated than anything painted; with
     # the printed housing (black PLA) and 10 mm LEDs these should hold, but
     # value_l may need lowering if the lamps look washed out on camera.
+    # Venue 2026-11-13 (captures/20261113_1034): the LEDs come out blown white
+    # in the middle, the colour only in a ring: red ring H 6 S 144 V 138 (its
+    # middle H 29), yellow almost white (ring S 36), green ring H 71 S 82 V 195.
+    # These read red and 5/5 green, nothing on 3 lane photos; yellow is not
+    # read (none: the robot waits, as for red). Was 100 / 200 / 10 / 10-27 /
+    # 28-95 / 120. Green from 46, well clear of the red lamp's middle (29).
     lamp:
-      saturation_l: 100
-      value_l: 200
+      saturation_l: 30
+      value_l: 150
     red:
-      hue_margin: 10
+      hue_margin: 20
     # The green lamp (a phone showing a traffic light) comes out yellow-green
     # on the Pi camera: hue 36-38 at its centre, 29-38 over the lamp, lower
     # still in some frames (2026-10-27 22:35 bag), so it was read as yellow
@@ -262,11 +268,11 @@ detect_traffic_light:
     # lamp is usually near hue 15-22).
     yellow:
       hue_l: 10
-      hue_h: 27
+      hue_h: 45
     green:
-      hue_l: 28
+      hue_l: 46
       hue_h: 95
-    min_area: 120         # at 640x480 (30 at 320x240)
+    min_area: 60          # at 640x480 (was 120)
     housing:
       value_h: 110
     publish_debug_image: true
@@ -284,30 +290,39 @@ detect_level_crossing:
     stripe:
       min_area: 160       # at 640x480 (40 at 320x240)
       min_fill: 0.5       # 0.6 -> 0.5 (2026-11-10)
-      min_thickness: 18   # pixels at 640x480 (9 at 320x240): how near the bar must be
+      min_thickness: 12   # 18 -> 12 (venue 2026-11-13): the bar ~1.5 m off has stripes 14-23 px thick
+      # The venue's bar has red and white stripes (S 170-197): white between the
+      # red ones, and gaps along the bar about as long as the stripes. Red seats
+      # edge to edge and faces in the upper window are not a bar.
+      white_between: true
+      min_gap_ratio: 0.4
     open_angle: 0.35
     # The bar is below the camera; the red seats along the wall are above
     # the horizon (row ~100 of 240) and made a "closed bar" of two patches.
-    roi_top: 0.6           # 0.5 -> 0.6 (2026-11-10): a bar far off stopped the robot early
+    # The venue's bar hangs about level with the camera (2026-11-13): seen across
+    # the road ~1.5 m off it is at row 0.52, near at 0.40, above the old window
+    # (0.6 down, made for a bar held low on the practice course). Stop as soon
+    # as it is seen down: a band 0.2..0.7, the whole width.
+    roi_top: 0.2
     # The window on the road ahead (2026-11-10): a raised bar was reported
     # closed and the robot stopped. Closed now needs the bar within 30 deg
     # of level and across 40 % of the window's width; upright (open_angle)
     # or anything in between (raised but leaning, rising) is open.
-    roi_bottom: 1.0
+    roi_bottom: 0.7
     roi_left: 0.05
     roi_right: 0.95
     # A trapezoid (2026-11-10): at its top (the far end) only the middle of
     # the road, 0.25..0.75 of the width; at the bottom 0.05..0.95 as above.
-    roi_top_left: 0.25
-    roi_top_right: 0.75
+    roi_top_left: 0.05
+    roi_top_right: 0.95
     closed_angle: 0.52   # 30 deg from level
-    closed_span: 0.3     # 0.4 -> 0.3 (2026-11-10): the bar down reached 33-39 % in bag 190846
+    closed_span: 0.2     # 0.3 -> 0.2 (venue 2026-11-13): the bar ~1.5 m off reaches 26 % of the window
     min_stripes: 3
     # The real bar: a round pole, its red a dark maroon shaded below, so
     # each stripe shows as a sliver. Over the 2026-10-14 bags this caught the
     # bar down in 5-10 of 15 pictures a second from ~0.5 m, nothing else.
     fragments:
-      enabled: true
+      enabled: false      # off at the venue: skin and faces in the upper window made a 'bar' of fragments
       saturation_l: 60
       value_l: 25
       # Pixel sizes at 640x480 (were 10, 9, 12, 110 at 320x240).

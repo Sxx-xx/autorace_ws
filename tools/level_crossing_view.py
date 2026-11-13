@@ -97,7 +97,7 @@ class View(Node):
         top, bottom, left, right = det.roi(hsv.shape)
 
         stripes = det.stripes(hsv)
-        state, alike = det.bar(stripes)
+        state, alike = det.bar(stripes, hsv)
         how, points, fragments = '', None, []
         if state:
             how = 'stripes'

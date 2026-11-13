@@ -408,3 +408,16 @@ roi_top 같은 비율 값은 그대로. **아직 주행으로 확인하지 않�
      part slowed into its end (1.5 x distance left, down to 0.02 m/s) and crept ~1 s before
      the arc: 3.7 s out of the bay (was ~4.4). With back_arc the straight part now keeps its
      speed up to the arc; ~1.2 s less expected.
+(26) 2026-11-13  Venue colours from photos (tools/color_shoot.py; captures/20261113_1034, _1050,
+     _1103). Traffic light: the LEDs blow out white in the middle (colour only in a ring): lamp
+     S 30, V 150, red +-20, yellow 10-45, green 46-95, min_area 60 -> red read red, green 5/5,
+     yellow none (waits). Lane: yellow and white tape both V ~254, only S apart (48-78 vs 0-5):
+     yellow H 15-45 S >= 25 V >= 150, white S <= 20 -> left all yellow, right all white on 3
+     photos (was half the yellow line white, the green light yellow). Lane width by the camera
+     0.288 m (setting 0.33): to be measured with a tape.
+     Level crossing: the venue's bar hangs about level with the camera, seen across the road at
+     row 0.52 (1.5 m) / 0.40 (near): window 0.2-0.7 full width, closed_span 0.2, stripe
+     thickness >= 12; stripes now the largest group of alike thickness (a STOP sign beside the
+     bar, 4x as thick, had left the stripes out), with white between and gaps >= 0.4 x stripe
+     (faces, red seats edge to edge); fragments off. Venue bar photos 4/4 closed, the other 10
+     photos none. Not yet driven.

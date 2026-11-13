@@ -82,20 +82,26 @@ detect_lane:
       auto_threshold: true
       auto_threshold_low: 1000
       auto_threshold_min_lightness: 160   # never down into the floor
+      # Venue 2026-11-13 (captures/20261113_1034): yellow and white tape both
+      # V ~254; only saturation tells them apart: yellow S 48-78, white S 0-5.
+      # With S 70 between them half the yellow line read white, and the wide
+      # yellow hue (10-127) took the green traffic light for yellow. Was
+      # white S <= 70; yellow H 10-127, S >= 70, V >= 95. NB the practice
+      # course's yellow tape was V 145: below this yellow floor of 150.
       lane:
         white:
           hue_l: 0
           hue_h: 179
           saturation_l: 0
-          saturation_h: 70
+          saturation_h: 20
           lightness_l: 170
           lightness_h: 255
         yellow:
-          hue_l: 10
-          hue_h: 127
-          saturation_l: 70
+          hue_l: 15
+          hue_h: 45
+          saturation_l: 25
           saturation_h: 255
-          lightness_l: 95
+          lightness_l: 150
           lightness_h: 255
     reliability:
       step: 5

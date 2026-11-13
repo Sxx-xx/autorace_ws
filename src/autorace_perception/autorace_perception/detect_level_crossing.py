@@ -101,6 +101,15 @@ class DetectLevelCrossing(Node):
         self.declare_parameter('fragments.white_value_l', 110)
         self.declare_parameter('fragments.white_saturation_h', 90)
         self.declare_parameter('fragments.white_miss', 1)         # gaps allowed not white
+        # The stripes too must have white between them: red seats in a row
+        # (dark between) and faces were taken for a bar once the window was
+        # moved up to where the venue's bar hangs (2026-11-13).
+        self.declare_parameter('stripe.white_between', False)
+        # Red and white take turns along a bar, so the gap between two red
+        # stripes is about as long as a stripe; seats in a row stand edge to
+        # edge. The median gap must be at least this share of the median
+        # stripe length along the bar (0: not checked).
+        self.declare_parameter('stripe.min_gap_ratio', 0.0)
         self.declare_parameter('publish_debug_image', True)
 
         def value(name):
@@ -130,6 +139,8 @@ class DetectLevelCrossing(Node):
         self.spacing_ratio = value('fragments.spacing_ratio')
         self.white_floor = (value('fragments.white_value_l'), value('fragments.white_saturation_h'))
         self.white_miss = value('fragments.white_miss')
+        self.stripe_white = value('stripe.white_between')
+        self.min_gap_ratio = value('stripe.min_gap_ratio')
         self.publish_debug = value('publish_debug_image')
 
         self.width = 640
@@ -190,14 +201,35 @@ class DetectLevelCrossing(Node):
             found.append((x, y, min(w, h), cv2.boundingRect(contour)))
         return found
 
-    def bar(self, stripes):
+    def white_between(self, hsv, points):
+        """How many gaps between neighbouring points (in order along the bar) are white."""
+        white = 0
+        for a, b in zip(points[:-1], points[1:]):
+            mx, my = int(round((a[0] + b[0]) / 2.0)), int(round((a[1] + b[1]) / 2.0))
+            patch = hsv[max(0, my - 1):my + 2, max(0, mx - 1):mx + 2]
+            if (patch.size and patch[..., 2].mean() > self.white_floor[0]
+                    and patch[..., 1].mean() < self.white_floor[1]):
+                white += 1
+        return white
+
+    def bar(self, stripes, hsv=None):
         """Return the state of the bar the stripes make up, and its stripes."""
         if len(stripes) < self.min_stripes:
             return BAR_NONE, []
-        # Stripes of one bar are alike in thickness; keep those like the
-        # thickest, which is the nearest bar if there should be two things.
-        thickest = max(stripe[2] for stripe in stripes)
-        alike = [stripe for stripe in stripes if stripe[2] > 0.6 * thickest]
+        # Stripes of one bar are alike in thickness: keep the largest group
+        # of alike ones (the thicker group on a tie, the nearer bar). Not
+        # those like the thickest: a red STOP sign beside the bar is one
+        # patch four times as thick, and it left the bar's five stripes out
+        # (venue, 2026-11-13).
+        best = None
+        for reference in stripes:
+            group = [stripe for stripe in stripes
+                     if 0.6 * reference[2] < stripe[2] <= reference[2] / 0.6]
+            key = (len(group), reference[2])
+            if best is None or key > best[0]:
+                best = (key, group)
+        alike = best[1]
+        thickest = max(stripe[2] for stripe in alike)
         if len(alike) < self.min_stripes or thickest < self.min_thickness:
             return BAR_NONE, []
         centres = np.array([stripe[:2] for stripe in alike])
@@ -213,6 +245,21 @@ class DetectLevelCrossing(Node):
         reach = np.sort(offsets @ along)
         if len(alike) < 3 and np.diff(reach).max() > 4.0 * thickest:
             return BAR_NONE, []
+        if self.min_gap_ratio > 0.0:
+            spans = []
+            for _, _, _, (x, y, w, h) in alike:
+                corners = np.array([[x, y], [x + w, y], [x, y + h], [x + w, y + h]], float)
+                along_c = (corners - centres.mean(axis=0)) @ along
+                spans.append((along_c.min(), along_c.max()))
+            spans.sort()
+            lengths = [b - a for a, b in spans]
+            gaps = [spans[i + 1][0] - spans[i][1] for i in range(len(spans) - 1)]
+            if gaps and np.median(gaps) < self.min_gap_ratio * np.median(lengths):
+                return BAR_NONE, []
+        if self.stripe_white and hsv is not None:
+            ordered = centres[np.argsort(offsets @ along)]
+            if self.white_between(hsv, ordered) < len(ordered) - 1 - self.white_miss:
+                return BAR_NONE, []
         x_low = min(stripe[3][0] for stripe in alike)
         x_high = max(stripe[3][0] + stripe[3][2] for stripe in alike)
         return self.judge(along, x_low, x_high, self.width), alike
@@ -292,7 +339,7 @@ class DetectLevelCrossing(Node):
         image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         self.width = hsv.shape[1]
-        state, stripes = self.bar(self.stripes(hsv))
+        state, stripes = self.bar(self.stripes(hsv), hsv)
         fragments = []
         if state == BAR_NONE and self.fragments_enabled:
             state, fragments = self.fragment_bar(hsv)
