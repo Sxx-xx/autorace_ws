@@ -34,6 +34,7 @@ import cv2
 from cv_bridge import CvBridge
 import numpy as np
 import rclpy
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo
 from sensor_msgs.msg import Image
@@ -81,7 +82,9 @@ class BevProjector(Node):
         self.bridge = CvBridge()
         self.homography = None
 
-        self.create_subscription(CameraInfo, '/camera/camera_info', self.callback_info, 1)
+        # Best effort, as the robot's camera sends it (a reliable reader would get nothing).
+        self.create_subscription(CameraInfo, '/camera/camera_info', self.callback_info,
+                                 qos_profile_sensor_data)
         self.create_subscription(Image, '/camera/image_input', self.callback_image, 1)
         self.pub_bev = self.create_publisher(Image, '/camera/image_output', 1)
 

@@ -9,6 +9,24 @@ for t in /scan /odom /camera/image_raw/compressed /camera_lane/image_raw/compres
   printf "== %-36s " "$t"
   timeout 6 ros2 topic hz "$t" 2>/dev/null | grep -m1 "average rate" || echo "no messages"
 done
+echo "== middleware: the PC and the robot must match (tools/dds.sh on both)"
+echo "  PC:    ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp (Fast DDS, the default)}"
+ROBOT=${ROBOT:-dd@turtlebot1.local}
+printf "  robot: "
+timeout 8 ssh -o ConnectTimeout=4 -o BatchMode=yes "$ROBOT" '
+  for p in $(pgrep -f "[c]si_camera|[t]urtlebot3_ros|[l]d_lidar"); do
+    v=$(tr "\0" "\n" < /proc/$p/environ 2>/dev/null | grep "^RMW_IMPLEMENTATION=" | cut -d= -f2)
+    echo "${v:-rmw_fastrtps_cpp (Fast DDS, the default)}"; exit
+  done; echo "no robot node running"' 2>/dev/null || echo "(ssh to $ROBOT failed: ROBOT=user@host)"
+echo "== cameras: publisher QoS (best effort expected) and how many read them over the Wi-Fi"
+for t in /camera/image_raw/compressed /camera_lane/image_raw/compressed; do
+  # 12 s: right after the rate checks above the ros2 CLI can be slow to answer.
+  info=$(timeout 12 ros2 topic info -v "$t" 2>/dev/null)
+  if [ -z "$info" ]; then printf "  %-36s no answer (run again)\n" "$t"; continue; fi
+  rel=$(echo "$info" | awk '/Endpoint type: PUBLISHER/{p=1} p && /Reliability/{print $2; exit}')
+  subs=$(echo "$info" | grep -m1 "Subscription count" | awk '{print $3}')
+  printf "  %-36s publisher %s, %s readers (each one is a copy over the Wi-Fi)\n" "$t" "${rel:-none}" "${subs:-0}"
+done
 echo "== clock offset (robot stamp vs PC now; keep under 0.05 s, chrony on both)"
 timeout 10 python3 - <<'PY'
 import rclpy, time

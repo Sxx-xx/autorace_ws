@@ -23,11 +23,17 @@ def decoded_topic(image_topic):
     return base + '/image_decoded'
 
 
-def republish(image_topic, use_sim_time, name):
+def republish(image_topic, use_sim_time, name, out_topic=None):
     """image_transport republish: <image_topic>/compressed -> decoded raw image.
 
+    out_topic defaults to decoded_topic(image_topic), what the detectors read;
+    a viewer passes its own so that it never doubles their frames.
+
     Run on the PC: only the JPEG frames cross the Wi-Fi, and the robot's raw
-    topic goes unsubscribed (DDS sends nothing nobody listens to).
+    topic goes unsubscribed (DDS sends nothing nobody listens to). The input is
+    read best effort, depth 1: republish's own default (reliable, 10) does not
+    match the robot's best effort camera, and over Wi-Fi a resent frame is a
+    stale one.
     """
     return Node(
         package='image_transport',
@@ -38,9 +44,11 @@ def republish(image_topic, use_sim_time, name):
         # arguments of older versions are ignored there (it then waits for a
         # raw input that never comes).
         parameters=[{'use_sim_time': use_sim_time,
-                     'in_transport': 'compressed', 'out_transport': 'raw'}],
+                     'in_transport': 'compressed', 'out_transport': 'raw',
+                     f'qos_overrides.{image_topic}/compressed.subscription.reliability': 'best_effort',
+                     f'qos_overrides.{image_topic}/compressed.subscription.depth': 1}],
         remappings=[
             ('in/compressed', image_topic + '/compressed'),
-            ('out', decoded_topic(image_topic)),
+            ('out', out_topic or decoded_topic(image_topic)),
         ],
     )

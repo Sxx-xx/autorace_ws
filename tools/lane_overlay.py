@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, PointCloud2
 from sensor_msgs_py import point_cloud2
 from geometry_msgs.msg import PointStamped
@@ -37,8 +38,8 @@ class LaneOverlay(Node):
         self.lines = {'yellow': None, 'white': None}
         self.target = None
         ns = camera.rsplit('/', 1)[0]
-        self.create_subscription(CameraInfo, ns + '/camera_info', self.callback_info, 1)
-        self.create_subscription(CompressedImage, camera + '/compressed', self.callback_image, 1)
+        self.create_subscription(CameraInfo, ns + '/camera_info', self.callback_info, qos_profile_sensor_data)
+        self.create_subscription(CompressedImage, camera + '/compressed', self.callback_image, qos_profile_sensor_data)
         for colour in self.lines:
             self.create_subscription(PointCloud2, f'/detect/lane_lines/{colour}',
                                      lambda m, c=colour: self.lines.__setitem__(c, m), 1)
